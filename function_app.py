@@ -159,6 +159,8 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
         user_id = str(user_id).strip()
         conversation_id = (body.get("conversation_id") if isinstance(body, dict) else None) or qp.get("conversation_id")
         conversation_id = str(conversation_id).strip() if conversation_id else None
+        if conversation_id and conversation_id.lower() == "init":
+            conversation_id = None
         new_conversation = False
         if user_id:
             if not conversation_id:
@@ -452,6 +454,8 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
         orig_missing_conversation_id = False
         conversation_id = (body.get("conversation_id") if isinstance(body, dict) else None) or qp.get("conversation_id")
         conversation_id = str(conversation_id).strip() if conversation_id else None
+        if conversation_id and conversation_id.lower() == "init":
+            conversation_id = None
         if not conversation_id and user_id:
             # Derive canonical conversation_id as <user_id>_<memory_id>
             try:

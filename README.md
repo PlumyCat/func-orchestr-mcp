@@ -83,7 +83,7 @@ See [`test.http`](test.http) for ready-to-run examples.
 ## Available endpoints
 
 - `GET /api/ping` – health check.
-- `POST /api/ask` – send a prompt and receive a completion. Supports optional `user_id` and `conversation_id` for memory.
+- `POST /api/ask` – send a prompt and receive a completion. Supports optional `user_id` and `conversation_id` for memory. Use `"init"` as `conversation_id` to start a new conversation.
 - MCP endpoints:
   - `POST /api/mcp-run` – run a prompt with optional tools.
   - `POST /api/mcp-enqueue` – enqueue a prompt for background processing.
