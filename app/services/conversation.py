@@ -28,8 +28,24 @@ def create_llm_client():
     return OpenAI(api_key=openai_key)
 
 
-def select_model_and_effort(prompt: str, default_model: Optional[str] = None, default_effort: str = "low") -> Tuple[str, str]:
-    model = default_model or os.getenv("AZURE_OPENAI_MODEL") or "gpt-5-mini"
+def resolve_special_model(model: Optional[str], fallback: Optional[str] = None) -> Optional[str]:
+    """Translate special aliases to concrete deployment names.
+
+    If an alias is provided but the corresponding environment variable is unset,
+    return the fallback so classic models still work.
+    """
+    if model == "model-router":
+        return os.getenv("MODEL_ROUTER_DEPLOYMENT") or fallback
+    if model == "gpt-oss-120b":
+        return os.getenv("GPT_OSS_120B_DEPLOYMENT") or fallback
+    return model or fallback
+
+
+def select_model_and_effort(
+    prompt: str, default_model: Optional[str] = None, default_effort: str = "low"
+) -> Tuple[str, str]:
+    base_default = resolve_special_model(os.getenv("AZURE_OPENAI_MODEL"), "gpt-5-mini")
+    model = resolve_special_model(default_model, base_default) or base_default
     effort = default_effort
     # Heuristique simple (placeholder) : on peut brancher un parser RULES plus tard
     if len(prompt) < 160:
