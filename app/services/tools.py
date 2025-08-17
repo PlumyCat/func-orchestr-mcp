@@ -73,7 +73,21 @@ def resolve_mcp_config(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # If caller did not specify anything, keep a conservative default list
             allowed_tools = ["hello_mcp", "get_snippet", "save_snippet"]
 
-    require_approval = body.get("require_approval") or "never"
+    def _normalize_require_approval(val: Any) -> str:
+        try:
+            if isinstance(val, str):
+                v = val.strip().lower()
+                if v in ("never", "initial", "always"):
+                    return v
+            if val is True:
+                return "always"
+            if val is False or val is None:
+                return "never"
+        except Exception:
+            pass
+        return "never"
+
+    require_approval = _normalize_require_approval(body.get("require_approval"))
     tool_cfg = {
         "type": "mcp",
         "server_label": body.get("server_label") or ("remote-mcp-function" if server_url.startswith("https://") else "local-mcp-function"),
