@@ -168,6 +168,20 @@ def run_responses_with_tools(
         for call in calls:
             try:
                 call_id = getattr(call, "id", None) or ""
+                call_type = (getattr(call, "type", None) or "function").lower()
+                if call_type == "mcp":
+                    logging.info("approving mcp call id='%s' in iteration %d", call_id, i + 1)
+                    tool_outputs.append({"tool_call_id": call_id, "output": ""})
+                    executed_any_tool = True
+                    try:
+                        mcp_info = getattr(call, "mcp", None)
+                        used_tools.append({
+                            "name": getattr(mcp_info, "method", None) or "",
+                            "type": "mcp",
+                        })
+                    except Exception:
+                        pass
+                    continue
                 func_obj = getattr(call, "function", None)
                 name = getattr(func_obj, "name", None) or ""
                 raw_args = getattr(func_obj, "arguments", None) or "{}"

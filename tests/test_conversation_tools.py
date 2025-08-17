@@ -75,3 +75,57 @@ def test_multiple_tool_iterations_with_special_models(model_name, caplog, monkey
     messages = [rec.message for rec in caplog.records]
     assert any("iteration 1" in msg for msg in messages)
     assert any("iteration 2" in msg for msg in messages)
+
+
+class FakeMCPResponses:
+    def __init__(self):
+        self.submissions = []
+
+    def create(self, **kwargs):
+        call = SimpleNamespace(id="mcp-call1", type="mcp", mcp=SimpleNamespace(method="one"))
+        submit = SimpleNamespace(tool_calls=[call])
+        required = SimpleNamespace(submit_tool_outputs=submit)
+        return SimpleNamespace(id="resp1", status="requires_action", required_action=required)
+
+    def submit_tool_outputs(self, response_id, tool_outputs, model=None):
+        self.submissions.append((response_id, tool_outputs))
+        if response_id == "resp1":
+            call = SimpleNamespace(id="mcp-call2", type="mcp", mcp=SimpleNamespace(method="two"))
+            submit = SimpleNamespace(tool_calls=[call])
+            required = SimpleNamespace(submit_tool_outputs=submit)
+            return SimpleNamespace(id="resp2", status="requires_action", required_action=required)
+        return SimpleNamespace(id="resp3", status="completed", output_text="mcp done")
+
+
+class FakeMCPClient:
+    def __init__(self):
+        self.responses = FakeMCPResponses()
+
+
+def test_mcp_tool_loop(monkeypatch):
+    fake_client = FakeMCPClient()
+    # ensure classic execute_tool_call not used
+    from app.services import tools as tools_module
+    called = []
+
+    def fake_execute(name, args):
+        called.append(name)
+        return "unused"
+
+    monkeypatch.setattr(tools_module, "execute_tool_call", fake_execute)
+
+    args = {
+        "model": "gpt-4.1",
+        "input": [],
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "store": False,
+    }
+
+    output_text, _ = conversation.run_responses_with_tools(
+        fake_client, args, allow_post_synthesis=False
+    )
+
+    assert output_text == "mcp done"
+    assert len(fake_client.responses.submissions) == 2
+    assert all(len(outs) == 1 for _, outs in fake_client.responses.submissions)
+    assert called == []
