@@ -149,12 +149,14 @@ def run_responses_with_tools(
     except Exception:
         internal_user_id = None
     response = client.responses.create(**responses_args)
-    # Safety loop to avoid infinite cycles
+    model_name = responses_args.get("model")
+    max_loops = 6
     executed_any_tool = False
     used_tools: List[Dict[str, Any]] = []
     fallback_text: Optional[str] = None
-    for _ in range(6):
+    for i in range(max_loops):
         status = getattr(response, "status", None)
+        logging.debug("tool loop iteration %d status=%s", i + 1, status)
         if status != "requires_action":
             break
         required = getattr(response, "required_action", None)
@@ -173,6 +175,7 @@ def run_responses_with_tools(
                     args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
                 except Exception:
                     args = {}
+                logging.info("executing tool '%s' in iteration %d", name, i + 1)
                 output = execute_tool_call(name, args)
                 tool_outputs.append({"tool_call_id": call_id, "output": output})
                 executed_any_tool = True
@@ -183,9 +186,13 @@ def run_responses_with_tools(
             except Exception:
                 logging.exception("tool execution failed; returning error text to model")
                 tool_outputs.append({"tool_call_id": getattr(call, "id", ""), "output": "Tool execution failed."})
-        response = client.responses.submit_tool_outputs(
-            response_id=getattr(response, "id", None), tool_outputs=tool_outputs
-        )
+        submit_kwargs = {"response_id": getattr(response, "id", None), "tool_outputs": tool_outputs}
+        if model_name in ("model-router", "gpt-oss-120b"):
+            submit_kwargs["model"] = model_name
+        response = client.responses.submit_tool_outputs(**submit_kwargs)
+    else:
+        if getattr(response, "status", None) == "requires_action":
+            logging.warning("maximum tool iterations (%d) reached", max_loops)
     output_text = getattr(response, "output_text", None)
     # Heuristic realtime fallback: if websearch available but no tool call occurred, and prompt looks realtime, call it directly
     try:
