@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import re
+import json
 from typing import Any, Dict, List, Optional
 
 _cosmos_client = None
@@ -319,8 +320,27 @@ def upsert_conversation_turn(user_id: str, conversation_id: str, user_text: str,
     doc.setdefault("conversation_id", conversation_id)
     # Sanitize the entire document to avoid Cosmos JSON parser errors
     doc = _sanitize_json_for_cosmos(doc)
-    logging.debug(f"Upserting conversation turn: user_id={user_id} doc_id={doc.get('id')} msgs={len(doc.get('messages') or [])}")
-    saved = container.upsert_item(doc)
+    logging.debug(
+        f"Upserting conversation turn: user_id={user_id} doc_id={doc.get('id')} msgs={len(doc.get('messages') or [])}"
+    )
+    try:
+        saved = container.upsert_item(doc)
+    except Exception:
+        snippet = ""
+        try:
+            snippet = json.dumps(doc, ensure_ascii=False)[:200]
+        except Exception:
+            try:
+                snippet = str(doc)[:200]
+            except Exception:
+                snippet = "<unavailable>"
+        logging.exception(
+            "Failed to upsert conversation turn: user_id=%s conversation_id=%s doc_snippet=%s",
+            user_id,
+            conversation_id,
+            snippet,
+        )
+        raise
     return saved
 
 
