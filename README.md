@@ -125,6 +125,32 @@ Available tools:
 
 When classic tools are enabled, they are added under `tools` and `tool_choice` is set to `auto` for endpoints that support tool use (e.g., `/api/orchestrate`, `/api/ask`, `/api/mcp-run`). You can restrict tool usage by specifying `allowed_tools` in the request body (e.g., `"allowed_tools": ["convert_word_to_pdf"]`).
 
+## Using model-router and gpt-oss-120b
+
+The project supports two special model aliases that map to real Azure OpenAI deployments:
+
+- `model-router` → `MODEL_ROUTER_DEPLOYMENT`
+- `gpt-oss-120b` → `GPT_OSS_120B_DEPLOYMENT`
+
+Set these environment variables to the deployment names of your Azure OpenAI models. When one of these aliases is requested, the service resolves it to the configured deployment before calling the Responses API. If the variable is unset, the alias falls back to `AZURE_OPENAI_MODEL`.
+
+Both classic Function tools (such as `search_web`) and MCP tools run in multiple rounds. The model can request a tool, receive the output, and then continue with another tool until a final answer is produced. The special models above propagate their alias through each submission so every round uses the same model.
+
+```python
+from app.services.conversation import resolve_special_model
+import os
+
+os.environ["MODEL_ROUTER_DEPLOYMENT"] = "gpt-4o"
+print(resolve_special_model("model-router"))
+# -> "gpt-4o"
+```
+
+### Limitations
+
+- `model-router` and `gpt-oss-120b` are currently in preview and their behavior may change.
+- `gpt-oss-120b` requests are limited to around 64k tokens per interaction.
+- Always check the [model router documentation](https://learn.microsoft.com/azure/ai-services/openai/how-to/model-routing) and [open-source model notes](https://learn.microsoft.com/azure/ai-services/openai/concepts/models#open-source-models) for the latest guidance.
+
 ## Deploy to Azure
 
 Use the [Azure Developer CLI](https://aka.ms/azd) to provision and deploy:
