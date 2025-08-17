@@ -73,15 +73,12 @@ def build_responses_args(
     tools: List[Dict[str, Any]] = []
     try:
         builtin_tools = get_builtin_tools_config()
-        if builtin_tools:
-            # Prioritize builtin tools first
-            tools.extend(builtin_tools)
-            # Optionally include MCP alongside builtin tools when explicitly allowed
-            include_mcp = str(os.getenv("INCLUDE_MCP_WITH_BUILTIN", "false")).lower() in ("1", "true", "yes", "on")
-            if include_mcp and mcp_tool_cfg:
-                tools.append(mcp_tool_cfg)
-        elif mcp_tool_cfg:
+        # Always include MCP if provided (ensures explicitly autorisés comme "hello_mcp")
+        if mcp_tool_cfg:
             tools.append(mcp_tool_cfg)
+        # Then include built-in tools (e.g., search_web)
+        if builtin_tools:
+            tools.extend(builtin_tools)
     except Exception:
         pass
     if tools:
@@ -129,9 +126,16 @@ def run_responses_with_tools(
             responses_args["model"] = os.getenv("ORCHESTRATOR_MODEL_TOOLS", responses_args.get("model", "gpt-4.1"))
     except Exception:
         pass
+    # Extract internal-only fields that must not be sent to the API
+    internal_user_id = None
+    try:
+        internal_user_id = str(responses_args.pop("x_user_id", "")).strip() or None
+    except Exception:
+        internal_user_id = None
     response = client.responses.create(**responses_args)
     # Safety loop to avoid infinite cycles
     executed_any_tool = False
+    used_tools: List[Dict[str, Any]] = []
     fallback_text: Optional[str] = None
     for _ in range(6):
         status = getattr(response, "status", None)
@@ -156,6 +160,10 @@ def run_responses_with_tools(
                 output = execute_tool_call(name, args)
                 tool_outputs.append({"tool_call_id": call_id, "output": output})
                 executed_any_tool = True
+                try:
+                    used_tools.append({"name": name, "arguments": args, "type": "classic"})
+                except Exception:
+                    pass
             except Exception:
                 logging.exception("tool execution failed; returning error text to model")
                 tool_outputs.append({"tool_call_id": getattr(call, "id", ""), "output": "Tool execution failed."})
@@ -167,30 +175,146 @@ def run_responses_with_tools(
     try:
         if allow_post_synthesis and (not executed_any_tool):
             tools = get_builtin_tools_config()
-            has_search = any((t.get("function", {}).get("name") == "search_web" or t.get("name") == "search_web") for t in tools)
-            if has_search:
-                user_text: Optional[str] = None
-                try:
-                    msgs = responses_args.get("input") or []
-                    if isinstance(msgs, list):
-                        for m in reversed(msgs):
-                            if m.get("role") == "user":
-                                parts = m.get("content") or []
-                                for p in parts:
-                                    if isinstance(p, dict) and p.get("type") == "input_text":
-                                        user_text = p.get("text")
-                                        break
-                                if user_text:
+            # Extract last user text once for heuristics
+            user_text: Optional[str] = None
+            try:
+                msgs = responses_args.get("input") or []
+                if isinstance(msgs, list):
+                    for m in reversed(msgs):
+                        if m.get("role") == "user":
+                            parts = m.get("content") or []
+                            for p in parts:
+                                if isinstance(p, dict) and p.get("type") == "input_text":
+                                    user_text = p.get("text")
                                     break
-                except Exception:
-                    user_text = None
+                            if user_text:
+                                break
+            except Exception:
+                user_text = None
+
+            # 1) Heuristic realtime websearch
+            has_search = any((t.get("function", {}).get("name") == "search_web" or t.get("name") == "search_web") for t in tools)
+            try:
                 text_l = (user_text or "").lower()
                 realtime_markers = ("météo", "meteo", "weather", "aujourd'hui", "now", "today", "breaking", "news", "actu", "actualité")
-                if user_text and any(k in text_l for k in realtime_markers):
+                if has_search and user_text and any(k in text_l for k in realtime_markers):
                     direct = execute_tool_call("search_web", {"query": user_text})
                     if isinstance(direct, str) and direct.strip():
                         output_text = direct
                         fallback_text = direct
+                        try:
+                            used_tools.append({"name": "search_web", "arguments": {"query": user_text}, "type": "classic", "direct": True})
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # 2) Heuristic document-service classic tools
+            try:
+                # Check that any doc-service tool is available
+                available_names = set()
+                for t in tools:
+                    nm = t.get("name") or t.get("function", {}).get("name")
+                    if nm:
+                        available_names.add(nm)
+                has_docsvc = any(n in available_names for n in (
+                    "convert_word_to_pdf",
+                    "init_user",
+                    "list_images",
+                    "list_shared_templates",
+                    "list_templates_http",
+                ))
+                if has_docsvc and user_text:
+                    lower = (user_text or "").lower()
+                    import re  # local import
+                    url_match = re.search(r"https?://\S+", user_text or "")
+                    found_url = url_match.group(0) if url_match else None
+                    user_id_for_tools = internal_user_id
+
+                    fallback_chunks: List[str] = []
+
+                    def set_fallback_and_note(name: str, args: Dict[str, Any], output: str) -> None:
+                        nonlocal output_text, fallback_text, used_tools
+                        # Accumulate multiple tool outputs; summarize afterwards
+                        try:
+                            label = name
+                            if name == "list_shared_templates":
+                                label = "shared_templates"
+                            elif name == "list_templates_http":
+                                label = "user_templates"
+                            elif name == "list_images":
+                                label = "user_images"
+                            chunk = f"<{label}>\n{output}\n</{label}>"
+                            fallback_chunks.append(chunk)
+                        except Exception:
+                            fallback_chunks.append(str(output))
+                        try:
+                            used_tools.append({"name": name, "arguments": args, "type": "classic", "direct": True})
+                        except Exception:
+                            pass
+
+                    # init_user
+                    if ("init" in lower or "initialize" in lower or "initialiser" in lower or "initialisé" in lower or "initialise" in lower) and ("container" in lower or "blob" in lower):
+                        if user_id_for_tools and ("init_user" in available_names):
+                            args = {"user_id": user_id_for_tools}
+                            direct = execute_tool_call("init_user", args)
+                            if isinstance(direct, str) and direct.strip():
+                                set_fallback_and_note("init_user", args, direct)
+
+                    # list_images (avoid matching when prompt requests initialization)
+                    if ("list" in lower or "lister" in lower or "voir" in lower or "mes images" in lower or "images" in lower) \
+                        and ("image" in lower or "images" in lower) and not ("init" in lower or "initialize" in lower or "initialiser" in lower):
+                        if user_id_for_tools and ("list_images" in available_names):
+                            args = {"user_id": user_id_for_tools}
+                            direct = execute_tool_call("list_images", args)
+                            if isinstance(direct, str) and direct.strip():
+                                set_fallback_and_note("list_images", args, direct)
+
+                    # list_shared_templates
+                    if ("template" in lower or "templates" in lower) and ("partagé" in lower or "partages" in lower or "shared" in lower):
+                        if "list_shared_templates" in available_names:
+                            args = {}
+                            direct = execute_tool_call("list_shared_templates", args)
+                            if isinstance(direct, str) and direct.strip():
+                                set_fallback_and_note("list_shared_templates", args, direct)
+
+                    # list_templates_http (user templates)
+                    if ("template" in lower or "templates" in lower) and ("mes" in lower or "my" in lower):
+                        if user_id_for_tools and ("list_templates_http" in available_names):
+                            args = {"user_id": user_id_for_tools}
+                            direct = execute_tool_call("list_templates_http", args)
+                            if isinstance(direct, str) and direct.strip():
+                                set_fallback_and_note("list_templates_http", args, direct)
+
+                    # upload_* tools removed
+
+                    # convert_word_to_pdf
+                    if ("convert" in lower or "convertir" in lower) and ("docx" in lower or "doc" in lower) and ("pdf" in lower):
+                        if ("convert_word_to_pdf" in available_names):
+                            # Accept either a blob-like filename or a blob path
+                            # Prefer explicit blob path if present; otherwise prefix with user_id
+                            filename_match = re.search(r"([\w\-./]+\.(?:docx|doc))", user_text or "", flags=re.IGNORECASE)
+                            blob_candidate = filename_match.group(1) if filename_match else None
+                            if blob_candidate:
+                                blob_path = blob_candidate if ("/" in blob_candidate) else (f"{user_id_for_tools}/{blob_candidate}" if user_id_for_tools else None)
+                                if blob_path:
+                                    args = {"blob": blob_path}
+                                    direct = execute_tool_call("convert_word_to_pdf", args)
+                                    if isinstance(direct, str) and direct.strip():
+                                        set_fallback_and_note("convert_word_to_pdf", args, direct)
+                    # If any chunks gathered, set fallback_text from all
+                    try:
+                        if fallback_chunks:
+                            combined = "\n\n".join(fallback_chunks)
+                            # only set if not already set by realtime websearch
+                            if not (isinstance(fallback_text, str) and fallback_text.strip()):
+                                fallback_text = combined
+                            else:
+                                fallback_text = f"{fallback_text}\n\n{combined}"
+                    except Exception:
+                        pass
+            except Exception:
+                pass
     except Exception:
         pass
     try:
@@ -214,10 +338,13 @@ def run_responses_with_tools(
                 except Exception:
                     user_text = ""
                 summary_prompt = (
-                    "Tu as reçu des résultats de recherche (voir le bloc <context>). "
-                    "Fourni une réponse synthétique et précise à la question de l'utilisateur, en citant les sources si possible.\n" 
-                    "N'hésite pas à utiliser d'autres outils si nécessaire. Réponds en français.\n\n"
-                    f"Question utilisateur : {user_text}\n\n<context>\n{fallback_text}\n</context>\n"
+                    "You received tool results as tagged blocks in <context>. "
+                    "Return a compact answer enumerating concrete items, with no extra prose. "
+                    "If the block <shared_templates> exists, output a line: 'Shared templates: name1, name2'. "
+                    "If the block <user_templates> exists, output a line: 'My templates: name1, name2'. "
+                    "Extract names by parsing JSON when present (use the 'name' property if available); if plain text, list each line as-is. "
+                    "If a list is empty or missing, write 'none' after the label. Do not mention 'context' or sources.\n\n"
+                    f"User question: {user_text}\n\n<context>\n{fallback_text}\n</context>\n"
                 )
                 args2: Dict[str, Any] = {
                     "model": model,
@@ -228,31 +355,104 @@ def run_responses_with_tools(
                     "text": {"format": {"type": "text"}, "verbosity": "medium"},
                     "store": False,
                 }
-                # Reuse tools to allow multi-tool flow during post-synthesis
-                if responses_args.get("tools"):
-                    args2["tools"] = responses_args["tools"]
-                    args2["tool_choice"] = "auto"
-                # Run a full tool loop again to allow additional tools if needed
-                final_text, final_resp = run_responses_with_tools(client, args2, allow_post_synthesis=False)
+                # Post-synthesis should not trigger more tool calls; ask for summary only
+                final_resp = client.responses.create(**args2)
+                final_text = getattr(final_resp, "output_text", None)
                 if final_text and final_text.strip():
                     output_text = final_text
+                    # Merge tool usage metadata from both passes
+                    try:
+                        final_used = getattr(final_resp, "_classic_tools_used", None)
+                        if isinstance(final_used, list):
+                            used_tools.extend(final_used)
+                    except Exception:
+                        pass
                     response = final_resp
+                else:
+                    # Fallback: ensure we synthesize a textual answer without tools
+                    try:
+                        no_tools_args2 = dict(args2)
+                        no_tools_args2.pop("tools", None)
+                        no_tools_args2.pop("tool_choice", None)
+                        direct_resp = client.responses.create(**no_tools_args2)
+                        direct_text = getattr(direct_resp, "output_text", None)
+                        if direct_text and direct_text.strip():
+                            output_text = direct_text
+                            response = direct_resp
+                    except Exception:
+                        pass
             except Exception:
                 logging.exception("post-synthesis second pass failed; returning fallback text")
                 # Keep output_text as fallback
+    except Exception:
+        pass
+    # Attach metadata of used classic tools to the response object for downstream HTTP handlers
+    try:
+        setattr(response, "_classic_tools_used", used_tools)
     except Exception:
         pass
     return output_text, response
 
 
 def build_system_message_text() -> str:
+    return _load_system_prompt_markdown()
+
+
+# --- System prompt loading (markdown with optional remote override) -----------------------------
+_SYSTEM_PROMPT_CACHE: Optional[str] = None
+_SYSTEM_PROMPT_FETCHED_AT: Optional[float] = None
+
+
+def _load_system_prompt_markdown() -> str:
+    """Load system prompt from markdown file or remote URL, with simple in-memory caching.
+
+    - SYSTEM_PROMPT_PATH: local file path (default: "system_prompt.md")
+    - SYSTEM_PROMPT_URL: optional remote URL to fetch markdown
+    - SYSTEM_PROMPT_TTL_SECONDS: cache TTL for remote fetch (default: 300)
+
+    Supports token replacement: {{today}} will be replaced with ISO date.
+    Fallbacks to a minimal built-in prompt if nothing is configured.
+    """
+    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_FETCHED_AT
     today = datetime.date.today().isoformat()
+    # Remote first when configured
+    url = os.getenv("SYSTEM_PROMPT_URL")
+    if url:
+        try:
+            import time as _time  # local alias
+            ttl = int(os.getenv("SYSTEM_PROMPT_TTL_SECONDS", "300"))
+            now = _time.time()
+            if _SYSTEM_PROMPT_CACHE is not None and _SYSTEM_PROMPT_FETCHED_AT and (now - _SYSTEM_PROMPT_FETCHED_AT < max(5, ttl)):
+                return _SYSTEM_PROMPT_CACHE.replace("{{today}}", today)
+            # Lazy import requests
+            try:
+                import requests  # type: ignore
+            except Exception:
+                requests = None  # type: ignore
+            if requests:
+                resp = requests.get(url, timeout=5)
+                if resp.status_code < 400:
+                    text = str(resp.text or "").strip()
+                    if text:
+                        _SYSTEM_PROMPT_CACHE = text
+                        _SYSTEM_PROMPT_FETCHED_AT = now
+                        return text.replace("{{today}}", today)
+        except Exception:
+            pass
+    # Local file next
+    path = os.getenv("SYSTEM_PROMPT_PATH", "system_prompt.md")
+    try:
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                md = f.read()
+                return md.replace("{{today}}", today)
+    except Exception:
+        pass
+    # Built-in minimal fallback
     base = (
-        "Tu es un assistant conversationnel. Utilise strictement le contexte des tours précédents. "
-        "En cas d'ambiguïté, suppose que l'utilisateur parle du même sujet que précédemment. Réponds en français. "
-        f"Date actuelle: {today}. "
+        "You are a helpful assistant. Prefer prior conversation context to disambiguate. "
+        f"Current date: {today}. "
     )
-    # Si des tools classiques sont disponibles, instruis le modèle sur leur usage
     try:
         from .tools import get_builtin_tools_config
         tools = get_builtin_tools_config()
@@ -260,9 +460,6 @@ def build_system_message_text() -> str:
     except Exception:
         has_search = False
     if has_search:
-        base += (
-            "Utilise systématiquement l'outil 'search_web' pour toute question dépendant du temps réel (météo, actualités, résultats en cours, disponibilités). "
-            "Traduis la requête utilisateur en anglais avant l'appel et fournis-la comme 'query'."
-        )
+        base += "Use the 'search_web' tool for time-sensitive questions (weather, news, live results, availability)."
     return base
 

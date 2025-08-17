@@ -1,0 +1,313 @@
+swagger: "2.0"
+info:
+  title: Func Orchestr MCP
+  description: >-
+    Custom connector for func-orchestr-mcp (Azure Function). Call endpoints
+    directly from Copilot Studio without LLM orchestration.
+  version: 1.0.0
+host: func-api-sevepnpyddayk.azurewebsites.net
+basePath: /
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+paths:
+  /api/ping:
+    get:
+      summary: Health check
+      operationId: Ping
+      security: []
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+            additionalProperties: true
+  /api/models:
+    get:
+      summary: List deployed Azure OpenAI model deployments (subscribed)
+      operationId: ListModels
+      parameters: []
+      responses:
+        "200":
+          description: Deployed model names and details
+          schema:
+            type: object
+            properties:
+              deployments:
+                type: array
+                items:
+                  type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+              env_defaults:
+                type: object
+                additionalProperties: true
+  /api/ask:
+    post:
+      summary: Ask (non-LLM in Copilot, Function handles everything)
+      operationId: Ask
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - prompt
+            properties:
+              prompt:
+                type: string
+                description: User prompt
+              user_id:
+                type: string
+              conversation_id:
+                type: string
+              model:
+                type: string
+                description: Override Azure OpenAI deployment name
+            additionalProperties: false
+      responses:
+        "200":
+          description: Completion
+          schema:
+            type: object
+            additionalProperties: true
+  /api/orchestrate:
+    post:
+      summary: Orchestrate model/tool selection
+      operationId: Orchestrate
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - prompt
+            properties:
+              prompt:
+                type: string
+                description: User prompt
+              prefer_reasoning:
+                type: boolean
+                description: Force reasoning
+              allowed_tools:
+                type: array
+                items:
+                  type: string
+                description: Explicitly allow tool names
+              user_id:
+                type: string
+              conversation_id:
+                type: string
+              reasoning_effort:
+                type: string
+                enum:
+                  - low
+                  - medium
+                  - high
+            additionalProperties: false
+      responses:
+        "200":
+          description: Decision and/or execution result
+          schema:
+            type: object
+            additionalProperties: true
+        "400":
+          description: Missing prompt
+          schema:
+            type: object
+            additionalProperties: true
+  /api/mcp-run:
+    post:
+      summary: Run with optional MCP tools (server orchestrates MCP/OpenAI)
+      operationId: McpRun
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - prompt
+            properties:
+              prompt:
+                type: string
+                description: Instruction or question
+              model:
+                type: string
+              require_approval:
+                type: boolean
+              allowed_tools:
+                type: string
+                description: Comma-separated tool names or * for all
+              stream:
+                type: boolean
+              debug:
+                type: boolean
+              reasoning_effort:
+                type: string
+                enum:
+                  - low
+                  - medium
+                  - high
+              user_id:
+                type: string
+              conversation_id:
+                type: string
+            additionalProperties: false
+      responses:
+        "200":
+          description: Run result
+          schema:
+            type: object
+            additionalProperties: true
+        "400":
+          description: Missing prompt
+  /api/mcp-enqueue:
+    post:
+      summary: Enqueue a background MCP job
+      operationId: McpEnqueue
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - prompt
+            properties:
+              prompt:
+                type: string
+              model:
+                type: string
+              reasoning_effort:
+                type: string
+                enum:
+                  - low
+                  - medium
+                  - high
+              user_id:
+                type: string
+              conversation_id:
+                type: string
+            additionalProperties: false
+      responses:
+        "200":
+          description: Enqueued
+          schema:
+            type: object
+            additionalProperties: true
+        "400":
+          description: Missing prompt
+  /api/mcp-process:
+    post:
+      summary: Transition a queued job to running (local/manual trigger)
+      operationId: McpProcess
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            properties:
+              job_id:
+                type: string
+            required:
+              - job_id
+      responses:
+        "200":
+          description: Running
+          schema:
+            type: object
+            additionalProperties: true
+        "400":
+          description: Missing job_id
+        "404":
+          description: Unknown job
+  /api/mcp-result:
+    get:
+      summary: Get the status/result of a queued job
+      operationId: McpResult
+      parameters:
+        - name: job_id
+          in: query
+          required: true
+          type: string
+        - name: return_partial_output
+          in: query
+          required: false
+          type: boolean
+      responses:
+        "200":
+          description: Job status/result
+          schema:
+            type: object
+            additionalProperties: true
+        "404":
+          description: Not found
+          schema:
+            type: object
+            additionalProperties: true
+  /api/mcp-memories:
+    get:
+      summary: List stored memories for a user
+      operationId: McpMemories
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          type: string
+        - name: limit
+          in: query
+          required: false
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: Memories
+          schema:
+            type: object
+            additionalProperties: true
+        "400":
+          description: Missing user_id
+  /api/mcp-memory:
+    get:
+      summary: Get memory by user and memory id
+      operationId: McpMemory
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          type: string
+        - name: memory_id
+          in: query
+          required: true
+          type: string
+      responses:
+        "200":
+          description: Memory
+          schema:
+            type: object
+            additionalProperties: true
+        "400":
+          description: Missing parameters
+        "404":
+          description: Not found
+definitions: {}
+parameters: {}
+responses: {}
+securityDefinitions:
+  api_key_query:
+    type: apiKey
+    in: query
+    name: code
+security:
+  - api_key_query: []
+tags: []

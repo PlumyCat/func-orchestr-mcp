@@ -1,1 +1,4 @@
 .venv
+swagger_power_apps.json
+swagger_power_apps.yaml
+test local.http

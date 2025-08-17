@@ -1,4 +1,19 @@
 # Azure Functions
+
+## Diagrammes et Flows
+
+Voici quelques diagrammes pour illustrer l'architecture et les flux principaux du projet :
+
+![Flux HTTP Ask](ask-http-flow.png)
+
+![Modèle mémoire Cosmos](mcp_Cosmos-memory-model.png)
+
+![Endpoints MCP](mcp_endpoints-flow.png)
+
+![Flux HTTP Orchestrations](mcp_orchestrations-http-flow.png)
+
+![Flux Jobs Orchestrations](mcp_orchestrations-jobs-flow.png)
+
 ## Chat using Azure OpenAI (Python v2 Function) + MCP Orchestration
 
 This project demonstrates how to build a Python Azure Functions app that interacts with Azure OpenAI and orchestrates tools via the Model Context Protocol (MCP). It includes a simple `/api/ask` endpoint, several `/api/mcp-*` endpoints for tool execution, and optional chat endpoints backed by assistant bindings.
@@ -77,6 +92,38 @@ See [`test.http`](test.http) for ready-to-run examples.
   - `GET /api/mcp-memories` and `GET /api/mcp-memory` – query stored memories.
 
 Optional chat endpoints (`PUT|GET|POST /api/chats/{chatId}`) are enabled when the `ENABLE_ASSISTANT_BINDINGS` environment variable is set.
+
+## Classic function tools (Websearch + Document Service)
+
+This app can attach classic function tools to the model (Responses API) so it can automatically call them during reasoning.
+
+### Websearch tool
+
+Configure these variables to enable the websearch tool:
+
+- `ENABLE_WEBSEARCH_TOOL`: `true|false` (default: `true`)
+- `WEBSEARCH_FUNCTION_URL`: The full URL of the websearch Function endpoint (e.g., `https://<func>.azurewebsites.net/api/websearch` or local)
+- `WEBSEARCH_FUNCTION_KEY`: Optional Functions key. If provided and not embedded in the URL, it will be appended as `?code=<key>`
+
+Usage: when enabled, the tool `search_web` is available and can be used automatically with `tool_choice=auto`.
+
+### Document Service tools
+
+If you run a companion Document Service exposing endpoints like `http://localhost:7075/api/...`, enable the following variables:
+
+- `ENABLE_DOCSVC_TOOLS`: `true|false` (default: `true`)
+- `DOCSVC_BASE_URL`: Base URL for the service, e.g., `http://localhost:7075/api`
+- `DOCSVC_FUNCTION_KEY`: Optional Functions key; appended as `?code=<key>` if present
+
+Available tools:
+
+- `convert_word_to_pdf(source_url, file_name?)` → POST `/convert/word-to-pdf`
+- `init_user(user_id)` → POST `/users/{userId}/init`
+- `list_images(user_id)` → GET `/users/{userId}/images`
+- `list_shared_templates()` → GET `/templates`
+- `list_templates_http(user_id)` → GET `/users/{userId}/templates`
+
+When classic tools are enabled, they are added under `tools` and `tool_choice` is set to `auto` for endpoints that support tool use (e.g., `/api/orchestrate`, `/api/ask`, `/api/mcp-run`). You can restrict tool usage by specifying `allowed_tools` in the request body (e.g., `"allowed_tools": ["convert_word_to_pdf"]`).
 
 ## Deploy to Azure
 

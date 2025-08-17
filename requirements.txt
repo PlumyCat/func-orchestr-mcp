@@ -7,3 +7,5 @@ azure-storage-queue>=12.9.0
 azure-storage-blob>=12.21.0
 openai>=1.51.0
 azure-cosmos==4.9.0
+requests>=2.32.0
+azure-identity>=1.16.0

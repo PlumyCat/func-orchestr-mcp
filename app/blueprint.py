@@ -17,7 +17,8 @@ from .services.storage import (
     upload_sidecar_request,
     get_sidecar_request,
 )
-from .services.tools import resolve_mcp_config
+from .services.tools import resolve_mcp_config, normalize_allowed_tools
+from .services.tools import execute_tool_call
 from .services.conversation import (
     create_llm_client,
     select_model_and_effort,
@@ -144,7 +145,7 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
                 try:
                     mem_id = cosmos_get_next_memory_id(user_id)
                 except Exception:
-                    mem_id = 1
+                    mem_id = int(time.time())
                 conversation_id = f"{user_id}_{mem_id}"
                 new_conversation = True
             try:
@@ -172,6 +173,12 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
                 + input_messages
                 + [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}]
             )
+        # Provide user_id to tool heuristics (doc service fallbacks)
+        try:
+            if user_id:
+                responses_args["x_user_id"] = user_id
+        except Exception:
+            pass
         run_id = str(uuid.uuid4())
         server_url_log = (mcp_tool_cfg.get('server_url') if mcp_tool_cfg else None)
         allowed_tools_log = (mcp_tool_cfg.get('allowed_tools') if mcp_tool_cfg else [])
@@ -184,7 +191,25 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
 
         output_text: Optional[str] = None
         # If any classic tools are present, handle tool loop synchronously
-        has_classic_tools = bool(responses_args.get("tools")) and (len(get_builtin_tools_config()) > 0)
+        # Respect caller intent: if allowed_tools excludes built-ins (e.g., 'search_web'), drop them
+        try:
+            raw_allowed = merged.get("allowed_tools")
+            normalized_allowed = normalize_allowed_tools(raw_allowed)
+            if normalized_allowed is not None and ("search_web" not in normalized_allowed):
+                if responses_args.get("tools"):
+                    filtered = []
+                    for t in responses_args["tools"]:
+                        name = t.get("name") or t.get("function", {}).get("name")
+                        if name == "search_web":
+                            continue
+                        filtered.append(t)
+                    responses_args["tools"] = filtered
+        except Exception:
+            pass
+        # Determine if any classic function tools remain after filtering
+        has_classic_tools = any(
+            (t.get("type") == "function") for t in (responses_args.get("tools") or [])
+        )
         if has_classic_tools:
             # Force explicit auto selection to nudge tool usage (string form)
             responses_args["tool_choice"] = "auto"
@@ -194,6 +219,81 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
                     responses_args["model"] = os.getenv("ORCHESTRATOR_MODEL_TOOLS", "gpt-4.1")
             except Exception:
                 pass
+        # If caller provided allowed_tools list with a single classic function name, avoid invalid tool_choice schema
+        try:
+            raw_allowed = merged.get("allowed_tools")
+            normalized_allowed = normalize_allowed_tools(raw_allowed)
+            if isinstance(normalized_allowed, list) and len(normalized_allowed) == 1:
+                single = str(normalized_allowed[0]).strip()
+                if single and responses_args.get("tools"):
+                    # keep only that tool among classic functions
+                    kept = []
+                    for t in responses_args["tools"]:
+                        name = t.get("name") or t.get("function", {}).get("name")
+                        if t.get("type") == "function" and name != single:
+                            continue
+                        kept.append(t)
+                    if kept:
+                        responses_args["tools"] = kept
+                        responses_args["tool_choice"] = "auto"
+                        # Pre-execution shortcut for convert_word_to_pdf
+                        if single == "convert_word_to_pdf":
+                            import re as _re
+                            m = _re.search(r"([\w\-./]+\.(?:docx|doc))", prompt or "", flags=_re.IGNORECASE)
+                            filename = m.group(1) if m else None
+                            if filename:
+                                blob_path = filename if ("/" in filename) else (f"{user_id}/{filename}" if user_id else None)
+                                if blob_path:
+                                    tool_out = execute_tool_call("convert_word_to_pdf", {"blob": blob_path})
+                                    system_msg = build_system_message_text()
+                                    summary_prompt = (
+                                        "You received tool results (see <context>). "
+                                        "Produce a short confirmation that directly answers the user's request using ONLY this context. "
+                                        "Do not include sample code, steps, or extra explanations. One sentence max.\n\n"
+                                        f"User question: {prompt}\n\n<context>\n{tool_out}\n</context>\n"
+                                    )
+                                    args2 = {
+                                        "model": model,
+                                        "input": [
+                                            {"role": "system", "content": [{"type": "input_text", "text": system_msg}]},
+                                            {"role": "user", "content": [{"type": "input_text", "text": summary_prompt}]},
+                                        ],
+                                        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                                        "store": False,
+                                    }
+                                    final_resp = client.responses.create(**args2)
+                                    final_text = getattr(final_resp, "output_text", None) or ""
+                                    if final_text.strip():
+                                        payload = {
+                                            "output_text": final_text,
+                                            "model": model,
+                                            "duration_ms": int((time.perf_counter() - start) * 1000),
+                                            "run_id": run_id,
+                                        }
+                                        try:
+                                            setattr(final_resp, "_classic_tools_used", [{"name": "convert_word_to_pdf", "arguments": {"blob": blob_path}, "type": "classic", "direct": True}])
+                                            payload["tool_used"] = getattr(final_resp, "_classic_tools_used")
+                                        except Exception:
+                                            pass
+                                        if user_id:
+                                            payload["user_id"] = user_id
+                                            payload["conversation_id"] = conversation_id
+                                            payload["new_conversation"] = new_conversation
+                                        # Persist
+                                        try:
+                                            if user_id and conversation_id:
+                                                cosmos_upsert_conversation_turn(user_id, conversation_id, prompt, final_text)
+                                        except Exception:
+                                            pass
+                                        resp = func.HttpResponse(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
+                                        try:
+                                            if user_id and conversation_id:
+                                                resp.headers["X-Conversation-Id"] = conversation_id
+                                        except Exception:
+                                            pass
+                                        return resp
+        except Exception:
+            pass
         if has_classic_tools:
             output_text, response = run_responses_with_tools(client, responses_args)
             if not output_text:
@@ -222,13 +322,24 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
             "duration_ms": int(elapsed * 1000),
             "run_id": run_id,
         }
+        # Include classic tool usage when available
+        try:
+            used_tools = getattr(response, "_classic_tools_used", None)
+            if isinstance(used_tools, list) and used_tools:
+                payload["tool_used"] = used_tools
+        except Exception:
+            pass
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
         if user_id:
+            payload["user_id"] = user_id
             payload["conversation_id"] = conversation_id
             payload["new_conversation"] = new_conversation
         # Persist brief memory record when Cosmos is configured
         try:
             if user_id and conversation_id:
                 cosmos_upsert_conversation_turn(user_id, conversation_id, prompt, output_text)
+                payload["persisted"] = True
         except Exception:
             pass
         if merged.get("debug"):
@@ -316,7 +427,7 @@ def mcp_enqueue(req: func.HttpRequest) -> func.HttpResponse:
                 try:
                     mem_id = cosmos_get_next_memory_id(user_id)
                 except Exception:
-                    mem_id = 1
+                    mem_id = int(time.time())
                 body["conversation_id"] = f"{user_id}_{mem_id}"
         except Exception:
             pass
@@ -385,13 +496,15 @@ def mcp_result(req: func.HttpRequest) -> func.HttpResponse:
 
 @bp.queue_trigger(arg_name="msg", queue_name=QUEUE_NAME, connection="AzureWebJobsStorage")
 def queue_trigger(msg: func.QueueMessage) -> None:
-    storage = _get_storage_clients()
     try:
         payload = json.loads(msg.get_body().decode("utf-8"))
         job_id = payload.get("job_id")
         body = payload.get("body") or {}
         if not job_id:
             return
+        logging.info(f"[mcp-queue] start job_id={job_id}")
+
+        storage = _get_storage_clients()
 
         blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
         created_at: Optional[str] = None
@@ -403,7 +516,13 @@ def queue_trigger(msg: func.QueueMessage) -> None:
         running_payload = {"status": "running", "progress": 1}
         if created_at:
             running_payload["createdAt"] = created_at
+        # Mark start time to compute duration later
+        try:
+            running_payload["startedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        except Exception:
+            pass
         blob_client.upload_blob(json.dumps(running_payload), overwrite=True)
+        logging.info(f"[mcp-queue] job {job_id} marked running")
 
         prompt = (body.get("prompt") or "") if isinstance(body, dict) else ""
         model = body.get("model") or os.getenv("AZURE_OPENAI_MODEL") or "gpt-5-mini"
@@ -414,6 +533,46 @@ def queue_trigger(msg: func.QueueMessage) -> None:
         responses_args: Dict[str, Any] = build_responses_args(
             model, prompt, mcp_tool_cfg, reasoning_effort
         )
+        logging.info(f"[mcp-queue] job {job_id} args built; tools={len(responses_args.get('tools', []))}")
+        # Prefer streaming by default for background jobs to provide progressive output
+        request_stream = True
+        try:
+            if isinstance(body, dict) and (body.get("stream") is not None):
+                request_stream = str(body.get("stream")).lower() in ("1", "true", "yes", "on")
+        except Exception:
+            request_stream = True
+        if request_stream and responses_args.get("tools"):
+            try:
+                responses_args["tools"] = [t for t in responses_args["tools"] if t.get("type") != "function"]
+                logging.info(f"[mcp-queue] job {job_id} tools filtered for streaming; tools={len(responses_args.get('tools', []))}")
+            except Exception:
+                pass
+        # Prefer streaming in background by default; drop classic function tools when streaming
+        try:
+            request_stream = str((body.get("stream") if isinstance(body, dict) else "true") or "true").lower() in ("1", "true", "yes", "on")
+        except Exception:
+            request_stream = True
+        try:
+            # Respect allowed_tools restrictions for classic tools
+            raw_allowed = body.get("allowed_tools") if isinstance(body, dict) else None
+            normalized_allowed = normalize_allowed_tools(raw_allowed)
+        except Exception:
+            normalized_allowed = None
+        try:
+            if responses_args.get("tools"):
+                filtered_tools: List[Dict[str, Any]] = []
+                for t in responses_args["tools"]:
+                    ttype = t.get("type")
+                    name = t.get("name") or t.get("function", {}).get("name")
+                    if request_stream and ttype == "function":
+                        # Drop classic function tools to enable streaming
+                        continue
+                    if (normalized_allowed is not None) and (ttype == "function") and (name == "search_web") and ("search_web" not in normalized_allowed):
+                        continue
+                    filtered_tools.append(t)
+                responses_args["tools"] = filtered_tools
+        except Exception:
+            pass
         # Inject prior turns when available (user_id + conversation_id)
         try:
             user_id_ctx = str((body.get("user_id") or "").strip())
@@ -442,7 +601,8 @@ def queue_trigger(msg: func.QueueMessage) -> None:
         progress_value: int = 1
         try:
             # If classic tools exist, avoid streaming and run tool loop
-            if len(get_builtin_tools_config()) > 0:
+            # If any classic function tools remain, run tool loop; otherwise, use streaming
+            if any((t.get("type") == "function") for t in (responses_args.get("tools") or [])):
                 output_text, _ = run_responses_with_tools(client, responses_args)
                 if not output_text:
                     try:
@@ -468,22 +628,49 @@ def queue_trigger(msg: func.QueueMessage) -> None:
                                 }
                                 if created_at:
                                     running_update["createdAt"] = created_at
+                                # Track timing
+                                running_update["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                                try:
+                                    if running_payload.get("startedAt"):
+                                        # compute elapsed
+                                        from datetime import datetime
+                                        started_dt = datetime.fromisoformat(running_payload["startedAt"].replace("Z", "+00:00"))
+                                        now_dt = datetime.utcnow()
+                                        running_update["duration_ms"] = int((now_dt - started_dt).total_seconds() * 1000)
+                                except Exception:
+                                    pass
                                 blob_client.upload_blob(json.dumps(running_update, ensure_ascii=False), overwrite=True)
-                final_response = stream.get_final_response()
-                output_text = getattr(final_response, "output_text", None) or "".join(partial_chunks)
+                    logging.info(f"[mcp-queue] job {job_id} streaming finished; chunks={len(partial_chunks)}")
+                    final_response = stream.get_final_response()
+                    output_text = getattr(final_response, "output_text", None) or "".join(partial_chunks)
         except Exception:
             logging.exception("streaming or tool loop failed; falling back to non-stream create")
-            response = client.responses.create(**responses_args)
-            output_text = getattr(response, "output_text", None)
+            try:
+                response = client.responses.create(**responses_args)
+                output_text = getattr(response, "output_text", None)
+            except Exception as e_inner:
+                logging.exception("non-stream create failed")
+                output_text = f"error: {e_inner}"
         result = {
             "status": "done",
             "output_text": output_text,
             "progress": 100,
             "model": model,
         }
+        # Add duration_ms
+        try:
+            from datetime import datetime
+            started = running_payload.get("startedAt") or created_at
+            if started:
+                started_dt = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+                now_dt = datetime.utcnow()
+                result["duration_ms"] = int((now_dt - started_dt).total_seconds() * 1000)
+        except Exception:
+            pass
         if created_at:
             result["createdAt"] = created_at
         blob_client.upload_blob(json.dumps(result, ensure_ascii=False), overwrite=True)
+        logging.info(f"[mcp-queue] job {job_id} done")
         # Save full turn memory (optional) when user_id provided
         try:
             user_id = str((body.get("user_id") or "").strip())
@@ -495,9 +682,13 @@ def queue_trigger(msg: func.QueueMessage) -> None:
     except Exception as e:
         logging.exception("queue_trigger failure")
         try:
-            job_id = job_id if 'job_id' in locals() else 'unknown'
-            blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
-            blob_client.upload_blob(json.dumps({"status": "error", "error": str(e)}), overwrite=True)
+            job = job_id if 'job_id' in locals() else 'unknown'
+            try:
+                storage = _get_storage_clients()
+                blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job}.json")
+                blob_client.upload_blob(json.dumps({"status": "error", "error": str(e)}), overwrite=True)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -559,6 +750,100 @@ def mcp_process(req: func.HttpRequest) -> func.HttpResponse:
         resp = func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
         return _apply_cors(resp, req)
 
+
+@bp.route(route="mcp-process-direct", methods=[func.HttpMethod.POST, func.HttpMethod.OPTIONS], auth_level=func.AuthLevel.FUNCTION)
+def mcp_process_direct(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        if req.method == "OPTIONS":
+            return _preflight_response(req)
+        try:
+            body: Dict[str, Any] = req.get_json()
+        except Exception:
+            body = {}
+        job_id = (body.get("job_id") or req.params.get("job_id") or "").strip()
+        if not job_id:
+            resp = func.HttpResponse(json.dumps({"error": "Missing 'job_id'"}), status_code=400, mimetype="application/json")
+            return _apply_cors(resp, req)
+
+        storage = _get_storage_clients()
+        blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
+        if not blob_client.exists():
+            resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "unknown"}), status_code=404, mimetype="application/json")
+            return _apply_cors(resp, req)
+
+        req_blob = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.req.json")
+        if not req_blob.exists():
+            return func.HttpResponse(json.dumps({"error": "Missing request payload for job"}), status_code=500, mimetype="application/json")
+        job_body = json.loads(req_blob.download_blob().readall().decode("utf-8"))
+
+        created_at: Optional[str] = None
+        try:
+            existing = json.loads(blob_client.download_blob().readall().decode("utf-8"))
+            created_at = existing.get("createdAt")
+        except Exception:
+            pass
+        running_payload = {"status": "running", "progress": 1}
+        if created_at:
+            running_payload["createdAt"] = created_at
+        blob_client.upload_blob(json.dumps(running_payload), overwrite=True)
+
+        prompt = (job_body.get("prompt") or "") if isinstance(job_body, dict) else ""
+        model = job_body.get("model") or os.getenv("AZURE_OPENAI_MODEL") or "gpt-5-mini"
+        reasoning_effort = (job_body.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT") or "low").lower()
+        mcp_tool_cfg = resolve_mcp_config(job_body)
+        client = create_llm_client()
+        conversation_id = str((job_body.get("conversation_id") or "").strip()) or None
+        responses_args: Dict[str, Any] = build_responses_args(model, prompt, mcp_tool_cfg, reasoning_effort)
+        # Prefer streaming in direct processing; drop classic tools
+        if responses_args.get("tools"):
+            responses_args["tools"] = [t for t in responses_args["tools"] if t.get("type") != "function"]
+
+        partial_chunks: List[str] = []
+        progress_value: int = 1
+        output_text: Optional[str] = None
+        try:
+            with client.responses.stream(**responses_args) as stream:
+                for event in stream:
+                    if getattr(event, "type", None) == "response.output_text.delta":
+                        delta = getattr(event, "delta", "")
+                        if delta:
+                            partial_chunks.append(delta)
+                            progress_value = min(95, progress_value + 2)
+                            running_update = {
+                                "status": "running",
+                                "partial_output": "".join(partial_chunks),
+                                "progress": progress_value,
+                            }
+                            if created_at:
+                                running_update["createdAt"] = created_at
+                            blob_client.upload_blob(json.dumps(running_update, ensure_ascii=False), overwrite=True)
+                final_response = stream.get_final_response()
+                output_text = getattr(final_response, "output_text", None) or "".join(partial_chunks)
+        except Exception:
+            logging.exception("mcp-process-direct streaming failed; fallback create")
+            try:
+                response = client.responses.create(**responses_args)
+                output_text = getattr(response, "output_text", None)
+            except Exception as e_inner:
+                output_text = f"error: {e_inner}"
+
+        result = {
+            "status": "done",
+            "output_text": output_text,
+            "progress": 100,
+            "model": model,
+        }
+        if created_at:
+            result["createdAt"] = created_at
+        blob_client.upload_blob(json.dumps(result, ensure_ascii=False), overwrite=True)
+
+        response_payload = {"job_id": job_id, **result}
+        resp = func.HttpResponse(json.dumps(response_payload), mimetype="application/json")
+        return _apply_cors(resp, req)
+    except Exception as e:
+        logging.exception("Error in /api/mcp-process-direct")
+        resp = func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+        return _apply_cors(resp, req)
 
 @bp.route(route="mcp-memories", methods=[func.HttpMethod.GET], auth_level=func.AuthLevel.FUNCTION)
 def mcp_list_memories(req: func.HttpRequest) -> func.HttpResponse:

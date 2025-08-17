@@ -1,0 +1,425 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+@user_id = user123
+@conversation_id = 
+@job_id = 
+
+
+### Models (available deployments)
+# @name models
+GET {{host}}/api/models
+Accept: application/json
+
+### Ping (health)
+# @name ping
+GET {{host}}/api/ping
+Accept: application/json
+
+### Ask 1 create conversation without memories
+# @name ask1
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Say hello and return a short response."
+}
+
+### Ask 2 create conversation with memories
+# @name ask2
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Say hello and return a short response.",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 3 continue conversation
+# @name ask3
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Answer the question: What is the capital of France?",
+  "user_id": "{{user_id}}",
+  "conversation_id": "{{conversation_id}}"
+}
+
+### Ask 4 select model without reasoning
+# @name ask4
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Summarize the advantages of Azure Functions in 3 bullet points.",
+  "model": "chat"
+}
+
+### Ask 5 select model with reasoning
+# @name ask5
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Summarize the advantages of Azure Functions in 3 bullet points.",
+  "model": "gpt-5-mini",
+  "reasoning_effort": "low"
+}
+
+### Ask 6 sith websearch tool
+# @name ask6
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "What's the weather like in Paris today?",
+  "model": "gpt-4.1-mini"
+}
+
+### Ask 7 (classic tools) convert Word to PDF
+# @name ask7
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Convert this Word document to PDF: https://example.com/sample.docx"
+}
+
+### Ask 8 (classic tools) init user
+# @name ask8
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Initialize my blob container.",
+  "model": "gpt-4.1-mini",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 9 (classic tools) list images
+# @name ask9
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 10 (classic tools) list shared templates
+# @name ask10
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "List the shared templates available to everyone.",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 11 (classic tools) list my templates
+# @name ask11
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "List my templates in storage.",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 12 use 2 classic tools
+# @name ask12
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "List the shared templates available to everyone and my templates in storage.",
+  "user_id": "{{user_id}}"
+}
+
+
+### Orchestrate 1 (no tools) without reasoning without memories = trivial mode
+# @name orchestrate1
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Summarize the advantages of Azure Functions in 3 bullet points.",
+  "prefer_reasoning": false
+}
+
+### Orchestrate 2 (no tools) with reasoning without memories = deep mode reasoning_effort=default
+# @name orchestrate2
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Find key considerations for deploying Azure Functions to production.",
+  "prefer_reasoning": true
+}
+
+### Orchestrate 3 (tools) without reasoning with memories = tools mode check decision only
+# @name orchestrate3
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Hi, try testing the `hello_mcp` tool.",
+  "prefer_reasoning": false,
+  "allowed_tools": "hello_mcp",
+  "user_id": "{{user_id}}",
+  "execute": false
+}
+
+### Orchestrate 4 (tools) without reasoning with memories = tools mode list tools
+# @name orchestrate4
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "list all tools available.",
+  "prefer_reasoning": false,
+  "allowed_tools": "*",
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 5 (tools) with reasoning with memories = deep mode reasoning_effort=default
+# @name orchestrate5
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "list all tools available.",
+  "prefer_reasoning": true,
+  "allowed_tools": "*",
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 6 (classic tools) list all tools including doc service
+# @name orchestrate6
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "List all available tools and briefly explain each.",
+  "prefer_reasoning": false,
+  "allowed_tools": "*",
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 7 (classic tools) convert Word to PDF via tool
+# @name orchestrate7
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "use convert_word_to_pdf tool on 'new.docx'",
+  "prefer_reasoning": false,
+  "allowed_tools": ["convert_word_to_pdf"],
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 8 (classic tools) init user container
+# @name orchestrate8
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Initialize the user's blob container.",
+  "prefer_reasoning": false,
+  "allowed_tools": ["init_user"],
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 9 (classic tools) list images
+# @name orchestrate9
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "prefer_reasoning": false,
+  "allowed_tools": ["list_images"],
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 10 (classic tools) list shared templates
+# @name orchestrate10
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "List shared templates available to everyone.",
+  "prefer_reasoning": false,
+  "allowed_tools": ["list_shared_templates"],
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 11 (classic tools) list my templates
+# @name orchestrate11
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "List my templates in storage.",
+  "prefer_reasoning": false,
+  "allowed_tools": ["list_templates_http"],
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run (classic tools) list tools including doc service
+# @name mcp_run_tools_list
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "List all available tools and briefly explain each.",
+  "allowed_tools": "*",
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run (classic tools) convert Word to PDF
+# @name mcp_run_convert_word_to_pdf
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "Convert this document to PDF: https://example.com/sample.docx",
+  "allowed_tools": ["convert_word_to_pdf"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run (classic tools) init user
+# @name mcp_run_init_user
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "Initialize the user's blob container.",
+  "allowed_tools": ["init_user"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run (classic tools) list images
+# @name mcp_run_list_images
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "allowed_tools": ["list_images"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run (classic tools) list shared templates
+# @name mcp_run_list_shared_templates
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "List shared templates available to everyone.",
+  "allowed_tools": ["list_shared_templates"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run (classic tools) list my templates
+# @name mcp_run_list_templates
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "List my templates in storage.",
+  "allowed_tools": ["list_templates_http"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run
+# @name mcp_run
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "Find key considerations for deploying Azure Functions to production.",
+  "model": "",
+  "require_approval": false,
+  "allowed_tools": "*",
+  "stream": false,
+  "debug": false,
+  "reasoning_effort": "low",
+  "user_id": "{{user_id}}",
+  "conversation_id": "{{conversation_id}}"
+}
+
+### MCP Run
+# @name mcp_run
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "create a new document new_test.docx",
+  "model": "gpt-4.1-mini",
+  "require_approval": false,
+  "allowed_tools": "*",
+  "stream": true,
+  "debug": true
+}
+
+### MCP Enqueue
+# @name mcp_enqueue
+POST {{host}}/api/mcp-enqueue
+Content-Type: application/json
+
+{
+  "prompt": "Generate a concise checklist for onboarding a new developer.",
+  "model": "gpt-4.1-mini",
+  "stream": true,
+  "allowed_tools": "*"
+}
+
+###
+@job_id = 
+
+### MCP Process (transition queued job to running)
+# @name mcp_process
+POST {{host}}/api/mcp-process
+Content-Type: application/json
+
+{
+  "job_id": "{{job_id}}"
+}
+
+### MCP Result (poll job status/result)
+# @name mcp_result
+GET {{host}}/api/mcp-result?job_id={{job_id}}&return_partial_output=true
+Accept: application/json
+
+
+### MCP Process Direct without 202 status
+# @name mcp_process_direct
+POST {{host}}/api/mcp-process-direct
+Content-Type: application/json
+
+{ "job_id": "{{job_id}}" }
+
+
+
+### storage cosmos storage test
+
+@memory_id = 
+### MCP Memories (list)
+# @name mcp_memories
+GET {{host}}/api/mcp-memories?user_id={{user_id}}&limit=10
+Accept: application/json
+
+### MCP Memory (get by id)
+# @name mcp_memory
+GET {{host}}/api/mcp-memory?user_id={{user_id}}&memory_id={{memory_id}}
+Accept: application/json

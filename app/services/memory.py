@@ -36,8 +36,28 @@ def _init_cosmos() -> None:
     except Exception as e:
         raise RuntimeError("The 'azure-cosmos' package is required. Add it to requirements.txt and deploy.") from e
     _quiet_azure_sdk_logs()
-    _cosmos_client = CosmosClient(endpoint, key)
-    _cosmos_db = _cosmos_client.create_database_if_not_exists(db_name)
+    # For local emulator over HTTPS with self-signed cert, allow disabling TLS verification
+    verify = True
+    try:
+        verify_env = os.getenv("COSMOS_VERIFY_TLS", "true").lower()
+        if (endpoint.startswith("https://localhost") or endpoint.startswith("https://127.0.0.1")) and verify_env in ("0", "false", "no", "off"):
+            verify = False
+    except Exception:
+        verify = True
+    logging.debug(f"Initializing Cosmos client endpoint={endpoint} verify_tls={verify}")
+    try:
+        _cosmos_client = CosmosClient(endpoint, key, connection_verify=verify)
+        _cosmos_db = _cosmos_client.create_database_if_not_exists(db_name)
+    except Exception as e:
+        msg = str(e)
+        # Common case with local emulator: TLS disabled but endpoint is https -> WRONG_VERSION_NUMBER
+        if endpoint.startswith("https://localhost") and "WRONG_VERSION_NUMBER" in msg.upper():
+            fallback = "http://" + endpoint[len("https://"):]
+            logging.debug(f"HTTPS handshake failed with WRONG_VERSION_NUMBER. Retrying Cosmos with HTTP endpoint={fallback}")
+            _cosmos_client = CosmosClient(fallback, key)
+            _cosmos_db = _cosmos_client.create_database_if_not_exists(db_name)
+        else:
+            raise
 
 
 def _sanitize_container_name(raw_user_id: str) -> str:
@@ -45,6 +65,50 @@ def _sanitize_container_name(raw_user_id: str) -> str:
     base = "mem_" + (raw_user_id or "unknown")
     safe = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in base)
     return safe[:255]
+
+
+def _sanitize_text_for_cosmos(raw: str) -> str:
+    """Sanitize text to avoid Cosmos JSON parser errors like 'unsupported Unicode escape sequence'.
+
+    - Remove any surrogate code points (U+D800..U+DFFF)
+    - Neutralize literal backslash-unicode sequences ("\u1234") by doubling the backslash
+    - Ensure the string is valid UTF-8 by replacing undecodable bytes
+    """
+    try:
+        text = str(raw or "")
+    except Exception:
+        return ""
+    try:
+        # Remove surrogate code points
+        text = "".join(ch for ch in text if not (0xD800 <= ord(ch) <= 0xDFFF))
+    except Exception:
+        pass
+    try:
+        # Neutralize literal \uXXXX sequences so the JSON parser does not treat them as escapes
+        # This keeps the original string intention while avoiding invalid escape errors on lone surrogates
+        text = text.replace("\\u", "\\\\u")
+    except Exception:
+        pass
+    try:
+        # Force to valid UTF-8; replace invalid sequences
+        text = text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    return text
+
+
+def _sanitize_json_for_cosmos(value: Any) -> Any:
+    """Recursively sanitize all strings in a JSON-serializable structure for Cosmos."""
+    try:
+        if isinstance(value, str):
+            return _sanitize_text_for_cosmos(value)
+        if isinstance(value, list):
+            return [_sanitize_json_for_cosmos(v) for v in value]
+        if isinstance(value, dict):
+            return {k: _sanitize_json_for_cosmos(v) for k, v in value.items()}
+        return value
+    except Exception:
+        return value
 
 
 def _get_user_container(user_id: str):
@@ -55,12 +119,46 @@ def _get_user_container(user_id: str):
         # Should not happen if _init_cosmos succeeded
         raise
     container_name = _sanitize_container_name(user_id)
+    logging.debug(f"Ensuring Cosmos container id={container_name} for user_id={user_id}")
     container = _cosmos_db.create_container_if_not_exists(
         id=container_name,
         partition_key=PartitionKey(path="/id"),
         default_ttl=int(os.getenv("COSMOS_DEFAULT_TTL_SECONDS", str(60 * 24 * 60 * 60)))  # 60 days
     )
     return container
+
+
+def _derive_short_title_from_text(text: str, max_length: int = 60, max_words: int = 8) -> str:
+    """Derive a very short, user-friendly title from the first user message.
+
+    Keeps it compact by limiting both characters and words, strips newlines and
+    excessive whitespace. Falls back to a generic timestamped title when empty.
+    """
+    try:
+        raw = (text or "").strip()
+        if not raw:
+            raise ValueError("empty text")
+        # Normalize whitespace and remove line breaks
+        normalized = " ".join(raw.replace("\n", " ").replace("\r", " ").split())
+        # Trim by words first
+        parts = normalized.split(" ")
+        if len(parts) > max_words:
+            normalized = " ".join(parts[:max_words])
+        # Then trim by length
+        if len(normalized) > max_length:
+            normalized = normalized[: max(0, max_length - 1)].rstrip() + "…"
+        # Capitalize first letter if not already
+        if normalized and normalized[0].islower():
+            normalized = normalized[0].upper() + normalized[1:]
+        return normalized or ""
+    except Exception:
+        pass
+    # Fallback: timestamped generic title
+    try:
+        now_iso = time.strftime("%Y-%m-%d %H:%M", time.gmtime())
+        return f"Conversation {now_iso}"
+    except Exception:
+        return "Conversation"
 
 
 def upsert_memory(user_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -76,7 +174,7 @@ def list_memories(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     if not user_id:
         raise ValueError("user_id is required")
     container = _get_user_container(user_id)
-    query = "SELECT c.id, c.type, c.model, c.createdAt, c.updatedAt FROM c ORDER BY c._ts DESC"
+    query = "SELECT c.id, c.type, c.title, c.createdAt, c.updatedAt FROM c ORDER BY c._ts DESC"
     items = list(container.query_items(query=query, enable_cross_partition_query=True))
     return items[: max(1, min(limit, 200))]
 
@@ -129,7 +227,8 @@ def get_conversation_messages(user_id: str, conversation_id: str, limit: int = 5
 def upsert_conversation_turn(user_id: str, conversation_id: str, user_text: str, assistant_text: str) -> Dict[str, Any]:
     """Append a new turn (user then assistant) into a single conversation doc with id == conversation_id.
 
-    Creates the document if missing, preserving consistent id usage across the conversation.
+    Creates the document if missing, using the provided conversation_id as the document id
+    and storing it explicitly under the "conversation_id" field for querying.
     """
     if not user_id:
         raise ValueError("user_id is required")
@@ -137,37 +236,81 @@ def upsert_conversation_turn(user_id: str, conversation_id: str, user_text: str,
         raise ValueError("conversation_id is required")
     container = _get_user_container(user_id)
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    # Try to read existing doc
+    # Try to read existing doc by provided conversation_id
     doc = get_memory(user_id, conversation_id)
     if not doc:
-        # Create new conversation document
-        # Infer memory_id and canonical id like <user_id>_<memory_id>
-        memory_id = get_next_memory_id(user_id)
-        canonical_id = f"{user_id}_{memory_id}"
+        # Create new conversation document with id == conversation_id
+        # Try to derive a numeric memory_id from the trailing segment of conversation_id when possible
+        derived_memory_id: Optional[int] = None
+        try:
+            if "_" in conversation_id:
+                tail = conversation_id.split("_")[-1]
+                derived_memory_id = int(tail)
+        except Exception:
+            derived_memory_id = None
+        if derived_memory_id is None:
+            try:
+                derived_memory_id = get_next_memory_id(user_id)
+            except Exception:
+                derived_memory_id = 1
         doc = {
-            "id": canonical_id,
+            "id": conversation_id,
+            "conversation_id": conversation_id,
             "type": "conversation",
             "user_id": user_id,
-            "memory_id": memory_id,
+            "memory_id": derived_memory_id,
             "created_at": now_iso,
             "updated_at": now_iso,
+            "createdAt": now_iso,
+            "updatedAt": now_iso,
             "messages": [],
             "ttl": int(os.getenv("COSMOS_DEFAULT_TTL_SECONDS", str(60 * 24 * 60 * 60)))
         }
+        # Seed title from the very first user input when creating the conversation
+        try:
+            if user_text:
+                doc["title"] = _sanitize_text_for_cosmos(_derive_short_title_from_text(user_text))
+        except Exception:
+            pass
+    else:
+        # Backfill title for legacy documents missing it
+        if not doc.get("title"):
+            try:
+                source_text: Optional[str] = None
+                # Prefer the first user message already present
+                for msg in (doc.get("messages") or []):
+                    if (msg.get("role") or "").strip() == "user":
+                        src = (msg.get("content") or "").strip()
+                        if src:
+                            source_text = src
+                            break
+                # If still none, use current user_text
+                if not source_text and user_text:
+                    source_text = user_text
+                if source_text:
+                    doc["title"] = _sanitize_text_for_cosmos(_derive_short_title_from_text(source_text))
+            except Exception:
+                pass
     # Append user and assistant messages
     if user_text:
-        doc["messages"].append({
+        doc.setdefault("messages", []).append({
             "role": "user",
-            "content": user_text,
+            "content": _sanitize_text_for_cosmos(user_text),
             "timestamp": now_iso,
         })
     if assistant_text:
-        doc["messages"].append({
+        doc.setdefault("messages", []).append({
             "role": "assistant",
-            "content": assistant_text,
+            "content": _sanitize_text_for_cosmos(assistant_text),
             "timestamp": now_iso,
         })
     doc["updated_at"] = now_iso
+    doc["updatedAt"] = now_iso
+    # Ensure conversation_id property is present for query-based retrieval
+    doc.setdefault("conversation_id", conversation_id)
+    # Sanitize the entire document to avoid Cosmos JSON parser errors
+    doc = _sanitize_json_for_cosmos(doc)
+    logging.debug(f"Upserting conversation turn: user_id={user_id} doc_id={doc.get('id')} msgs={len(doc.get('messages') or [])}")
     saved = container.upsert_item(doc)
     return saved
 
@@ -176,16 +319,39 @@ def get_next_memory_id(user_id: str) -> int:
     if not user_id:
         raise ValueError("user_id is required")
     container = _get_user_container(user_id)
-    # Get highest memory_id among conversation docs
-    query = (
-        "SELECT TOP 1 VALUE c.memory_id FROM c "
-        "WHERE c.type = 'conversation' AND IS_NUMBER(c.memory_id) "
-        "ORDER BY c.memory_id DESC"
-    )
-    items = list(container.query_items(query=query, enable_cross_partition_query=True))
+    # Get highest numeric memory_id across docs (primary strategy)
+    query_max_memid = "SELECT VALUE MAX(c.memory_id) FROM c WHERE IS_NUMBER(c.memory_id)"
+    items = list(container.query_items(query=query_max_memid, enable_cross_partition_query=True))
     try:
-        max_id = int(items[0]) if items else 0
+        max_by_field = int(items[0]) if items and items[0] is not None else 0
     except Exception:
-        max_id = 0
-    return max_id + 1
+        max_by_field = 0
+
+    # Fallback: also derive from id suffix if pattern *_<number> exists (handles legacy docs)
+    max_by_id_suffix = 0
+    try:
+        id_query = "SELECT TOP 200 c.id FROM c ORDER BY c._ts DESC"
+        id_items = list(container.query_items(query=id_query, enable_cross_partition_query=True))
+        for it in id_items:
+            doc_id = it.get("id") if isinstance(it, dict) else None
+            if not isinstance(doc_id, str):
+                continue
+            # Extract trailing number if any
+            if "_" in doc_id:
+                tail = doc_id.rsplit("_", 1)[-1]
+                try:
+                    n = int(tail)
+                    if n > max_by_id_suffix:
+                        max_by_id_suffix = n
+                except Exception:
+                    continue
+    except Exception:
+        max_by_id_suffix = 0
+
+    max_id = max(max_by_field, max_by_id_suffix)
+    next_id = max_id + 1
+    logging.debug(
+        f"Computed next memory_id for user_id={user_id}: next={next_id} (max_field={max_by_field}, max_id_suffix={max_by_id_suffix})"
+    )
+    return next_id
 

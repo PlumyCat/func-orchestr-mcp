@@ -14,7 +14,7 @@ from app.services.memory import upsert_conversation_turn as cosmos_upsert_conver
 from app.services.memory import get_next_memory_id as cosmos_get_next_memory_id
 from app.services.tools import resolve_mcp_config
 from app.services.conversation import build_responses_args, run_responses_with_tools, build_system_message_text
-from app.services.tools import get_builtin_tools_config
+from app.services.tools import get_builtin_tools_config, execute_tool_call
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -43,6 +43,82 @@ def _get_aoai_client() -> AzureOpenAI:
 def ping(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(json.dumps({"status": "ok"}), mimetype="application/json")
 
+
+# List available deployments (subscribed models) from Azure OpenAI
+@app.function_name("models")
+@app.route(route="models", methods=["GET"])
+def list_models(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        # Management plane call (ARM) to list deployed model names
+        # Requires Managed Identity or Service Principal with Reader on the OpenAI resource
+        qp = getattr(req, 'params', {}) or {}
+        # Prefer env vars; allow fallback to query params and also accept plain names in env for convenience
+        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID") or os.getenv("subscriptionId") or qp.get('subscriptionId')
+        rg_name = os.getenv("AZURE_RESOURCE_GROUP") or os.getenv("resourceGroup") or qp.get('resourceGroup')
+        account_name = os.getenv("AZURE_OPENAI_RESOURCE_NAME") or os.getenv("accountName") or qp.get('accountName')
+        if not sub_id or not rg_name or not account_name:
+            return func.HttpResponse(
+                json.dumps({
+                    "error": "Missing AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, or AZURE_OPENAI_RESOURCE_NAME.",
+                    "hint": "Provide them as env vars or query params subscriptionId, resourceGroup, accountName"
+                }),
+                status_code=400,
+                mimetype="application/json",
+            )
+        try:
+            # Lazy imports
+            from azure.identity import DefaultAzureCredential  # type: ignore
+            import requests  # type: ignore
+        except Exception as e:
+            return func.HttpResponse(json.dumps({"error": f"Missing dependencies: {e}"}), status_code=500, mimetype="application/json")
+        # Acquire ARM token
+        try:
+            credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+            token = credential.get_token("https://management.azure.com/.default").token
+        except Exception as e:
+            return func.HttpResponse(json.dumps({"error": f"Failed to acquire AAD token: {e}"}), status_code=500, mimetype="application/json")
+        api_version_mgmt = os.getenv("AZURE_OPENAI_MGMT_API_VERSION", "2023-05-01")
+        mgmt_url = (
+            f"https://management.azure.com/subscriptions/{sub_id}/resourceGroups/{rg_name}"
+            f"/providers/Microsoft.CognitiveServices/accounts/{account_name}/deployments?api-version={api_version_mgmt}"
+        )
+        try:
+            r = requests.get(mgmt_url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+            r.raise_for_status()
+            payload_json = r.json()
+        except Exception as e:
+            return func.HttpResponse(json.dumps({"error": f"ARM deployments list failed: {e}"}), status_code=500, mimetype="application/json")
+
+        value = payload_json.get("value") if isinstance(payload_json, dict) else None
+        names = []
+        details = []
+        for d in (value or []):
+            name = d.get("name") if isinstance(d, dict) else None
+            props = d.get("properties") if isinstance(d, dict) else {}
+            model_props = props.get("model") if isinstance(props, dict) else {}
+            model_name = model_props.get("name") if isinstance(model_props, dict) else None
+            if name:
+                names.append(name)
+            details.append({
+                "name": name,
+                "model": model_name,
+                "id": d.get("id") if isinstance(d, dict) else None,
+                "type": d.get("type") if isinstance(d, dict) else None,
+            })
+
+        env_defaults = {
+            "CHAT_MODEL_DEPLOYMENT_NAME": os.getenv("CHAT_MODEL_DEPLOYMENT_NAME"),
+            "ORCHESTRATOR_MODEL_TRIVIAL": os.getenv("ORCHESTRATOR_MODEL_TRIVIAL"),
+            "ORCHESTRATOR_MODEL_STANDARD": os.getenv("ORCHESTRATOR_MODEL_STANDARD"),
+            "ORCHESTRATOR_MODEL_TOOLS": os.getenv("ORCHESTRATOR_MODEL_TOOLS"),
+            "ORCHESTRATOR_MODEL_REASONING": os.getenv("ORCHESTRATOR_MODEL_REASONING"),
+            "REASONING_MODELS": os.getenv("REASONING_MODELS"),
+        }
+
+        payload = {"deployments": names, "details": details, "env_defaults": env_defaults}
+        return func.HttpResponse(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
+    except Exception as e:
+        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
 
 # Simple ask http POST function that returns the completion based on prompt
 @app.function_name("ask")
@@ -80,7 +156,7 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
                 try:
                     mem_id = cosmos_get_next_memory_id(user_id)
                 except Exception:
-                    mem_id = 1
+                    mem_id = int(time.time())
                 conversation_id = f"{user_id}_{mem_id}"
                 new_conversation = True
             # Load last turns as structured messages
@@ -107,6 +183,13 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
                 "text": {"format": {"type": "text"}, "verbosity": "medium"},
                 "store": False,
             }
+            # Propager reasoning_effort si fourni (même en ask)
+            try:
+                req_effort = body.get("reasoning_effort") if isinstance(body, dict) else None
+                if req_effort:
+                    responses_args["reasoning"] = {"effort": req_effort}
+            except Exception:
+                pass
             # Enrich input with system + prior + current turn
             system_msg = build_system_message_text()
             enriched_messages = (
@@ -122,6 +205,12 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
                     responses_args["tools"] = tools
                     # Force auto tool usage (string form expected by Responses API)
                     responses_args["tool_choice"] = "auto"
+            except Exception:
+                pass
+            # Provide user_id to tool heuristics (doc service fallbacks)
+            try:
+                if user_id:
+                    responses_args["x_user_id"] = user_id
             except Exception:
                 pass
             if len(get_builtin_tools_config()) > 0:
@@ -146,11 +235,24 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
                 "text": {"format": {"type": "text"}, "verbosity": "medium"},
                 "store": False,
             }
+            # Propager reasoning_effort si fourni (sans historique)
+            try:
+                req_effort = body.get("reasoning_effort") if isinstance(body, dict) else None
+                if req_effort:
+                    responses_args["reasoning"] = {"effort": req_effort}
+            except Exception:
+                pass
             try:
                 tools = get_builtin_tools_config()
                 if tools:
                     responses_args["tools"] = tools
                     responses_args["tool_choice"] = "auto"
+            except Exception:
+                pass
+            # Provide user_id to tool heuristics (doc service fallbacks)
+            try:
+                if user_id:
+                    responses_args["x_user_id"] = user_id
             except Exception:
                 pass
             if len(get_builtin_tools_config()) > 0:
@@ -170,15 +272,35 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
         run_id = str(uuid.uuid4())
         duration_ms = int((time.perf_counter() - started) * 1000)
         # Optional memory persist if user_id provided
+        persisted: bool = False
         try:
             if user_id:
+                logging.debug(f"Persisting conversation turn user_id={user_id} conversation_id={conversation_id}")
                 cosmos_upsert_conversation_turn(user_id, conversation_id, prompt, output_text)
+                persisted = True
+                logging.debug("Persist OK")
+        except Exception as e:
+            logging.exception(f"Persist failed: {e}")
+        payload = {"output_text": output_text, "model": model, "duration_ms": duration_ms}
+        # Expose classic tool usage when available
+        try:
+            used_tools = getattr(response, "_classic_tools_used", None)
+            if isinstance(used_tools, list) and used_tools:
+                payload["tool_used"] = used_tools
         except Exception:
             pass
-        payload = {"output_text": output_text, "model": model, "duration_ms": duration_ms, "run_id": run_id}
+        # Echo reasoning effort if present in request
+        try:
+            req_effort = body.get("reasoning_effort") if isinstance(body, dict) else None
+            if req_effort:
+                payload["reasoning_effort"] = str(req_effort).lower()
+        except Exception:
+            pass
         if user_id:
+            payload["user_id"] = user_id
             payload["conversation_id"] = conversation_id
             payload["new_conversation"] = new_conversation
+            payload["persisted"] = persisted
         resp = func.HttpResponse(json.dumps(payload, ensure_ascii=False), status_code=200, mimetype="application/json")
         resp.headers["X-Model-Used"] = model
         if user_id and conversation_id:
@@ -202,13 +324,25 @@ def _route_mode(prompt: str, has_tools: bool, constraints: dict, allowed_tools: 
     # Only select tools mode if caller explicitly allows tools
     if has_tools and allowed_tools:
         return "tools"
-    prefer_reasoning = str(constraints.get("preferReasoning", "")).lower() in ("1", "true", "yes", "on")
+    # Accept both camelCase and snake_case flags and flat boolean values
+    prefer_reasoning = False
+    try:
+        prefer_reasoning = str(constraints.get("preferReasoning", "")).lower() in ("1", "true", "yes", "on") or \
+                           str(constraints.get("prefer_reasoning", "")).lower() in ("1", "true", "yes", "on")
+    except Exception:
+        prefer_reasoning = False
     try:
         max_latency_ms = int(constraints.get("maxLatencyMs")) if constraints.get("maxLatencyMs") is not None else None
     except Exception:
         max_latency_ms = None
     text = (prompt or "").lower()
-    deep_markers = ("plan", "multi-step", "derive", "prove", "why", "strategy", "chain of thought")
+    # Include French markers so FR prompts can trigger reasoning automatically
+    deep_markers = (
+        "plan", "multi-step", "derive", "prove", "why", "strategy", "chain of thought",
+        "plan d'action", "multi-etapes", "multi étapes", "démontrer", "demontrer", "prouve", "pourquoi",
+        "stratégie", "strategie", "raisonnement", "chaine de raisonnement", "chaîne de raisonnement",
+        "réfléchis", "reflechis", "pas à pas", "pas a pas", "analyse détaillée", "explication détaillée"
+    )
     if prefer_reasoning or any(m in text for m in deep_markers) or len(prompt) > 800:
         # If explicit latency budget is tight, downshift to standard
         if max_latency_ms is not None and max_latency_ms < 1500:
@@ -237,6 +371,22 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
         execute = str((body.get("execute") if isinstance(body, dict) else qp.get("execute")) or "true").lower() in ("1", "true", "yes", "on")
         constraints = body.get("constraints") if isinstance(body, dict) and isinstance(body.get("constraints"), dict) else {}
         allowed_tools = body.get("allowed_tools") if isinstance(body, dict) else None
+        # Merge top-level flags into constraints for backward compatibility
+        if isinstance(body, dict) and isinstance(constraints, dict):
+            top_level_flags = {
+                "prefer_reasoning": body.get("prefer_reasoning"),
+                "preferReasoning": body.get("preferReasoning"),
+                "maxLatencyMs": body.get("maxLatencyMs"),
+                # Accept snake_case and map it to camelCase expected downstream
+                "maxLatencyMs_from_snake": body.get("max_latency_ms"),
+            }
+            for key, value in top_level_flags.items():
+                if value is None:
+                    continue
+                if key == "maxLatencyMs_from_snake":
+                    constraints.setdefault("maxLatencyMs", value)
+                else:
+                    constraints.setdefault(key, value)
         # Normalize user_id early so we can persist memory even on first exchange
         user_id = ((body.get("user_id") if isinstance(body, dict) else None) or (qp.get("user_id") or ""))
         user_id = str(user_id).strip()
@@ -261,7 +411,7 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
         mode = _route_mode(prompt, has_tools=(mcp_tool_cfg is not None), constraints=constraints, allowed_tools=normalized_tools)
         models = _orchestrator_models()
         selected_model = models["deep" if mode == "deep" else ("tools" if mode == "tools" else mode)]
-        reasoning_effort = (body.get("reasoning_effort") if isinstance(body, dict) else None) or os.getenv("DEFAULT_REASONING_EFFORT", "low")
+        reasoning_effort = (body.get("reasoning_effort") if isinstance(body, dict) else (qp.get("reasoning_effort") if qp else None)) or os.getenv("DEFAULT_REASONING_EFFORT", "low")
         decision_id = str(uuid.uuid4())
 
         decision_payload = {
@@ -290,7 +440,7 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
             try:
                 mem_id = cosmos_get_next_memory_id(user_id)
             except Exception:
-                mem_id = 1
+                mem_id = int(time.time())
             conversation_id = f"{user_id}_{mem_id}"
             orig_missing_conversation_id = True
 
@@ -355,9 +505,121 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
                     + [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}]
                 )
                 responses_args["input"] = enriched_messages
+            else:
+                # No history: keep input minimal; do not inject system message to avoid forcing language
+                responses_args["input"] = [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}]
+            # If caller restricted allowed_tools, filter classic tools accordingly and optionally force a single tool
+            try:
+                if isinstance(normalized_tools, list) and responses_args.get("tools"):
+                    filtered_tools = []
+                    classic_names: List[str] = []
+                    for t in responses_args["tools"]:
+                        ttype = t.get("type")
+                        name = t.get("name") or t.get("function", {}).get("name")
+                        if ttype == "function":
+                            if ("*" in normalized_tools) or (name in normalized_tools):
+                                filtered_tools.append(t)
+                                classic_names.append(name or "")
+                            else:
+                                continue
+                        else:
+                            # Keep MCP tool configs regardless of allow-list here
+                            filtered_tools.append(t)
+                    if filtered_tools:
+                        responses_args["tools"] = filtered_tools
+                        # When only one classic function remains, just keep 'auto' with a single choice
+                        # to avoid invalid tool_choice schema errors
+                        only_classics = [n for n in classic_names if n]
+                        if len(only_classics) == 1:
+                            responses_args["tool_choice"] = "auto"
+            except Exception:
+                pass
+            # Optional pre-execution when a single classic tool is allowed
+            try:
+                if isinstance(normalized_tools, list) and responses_args.get("tools"):
+                    # Identify remaining classic tools after filtering
+                    remaining_classics = [
+                        (t.get("name") or t.get("function", {}).get("name"))
+                        for t in responses_args.get("tools", [])
+                        if t.get("type") == "function"
+                    ]
+                    if len(remaining_classics) == 1 and remaining_classics[0] == "convert_word_to_pdf":
+                        import re as _re
+                        m = _re.search(r"([\w\-./]+\.(?:docx|doc))", prompt, flags=_re.IGNORECASE)
+                        filename = m.group(1) if m else None
+                        if filename:
+                            blob_path = filename if ("/" in filename) else (f"{user_id}/{filename}" if user_id else None)
+                            if blob_path:
+                                tool_out = execute_tool_call("convert_word_to_pdf", {"blob": blob_path})
+                                # Post-synthesis: one-short confirmation based on tool output
+                                system_msg = build_system_message_text()
+                                summary_prompt = (
+                                    "You received tool results (see <context>). "
+                                    "Produce a short confirmation that directly answers the user's request using ONLY this context. "
+                                    "Do not include sample code, steps, or extra explanations. One sentence max.\n\n"
+                                    f"User question: {prompt}\n\n<context>\n{tool_out}\n</context>\n"
+                                )
+                                args2 = {
+                                    "model": selected_model,
+                                    "input": [
+                                        {"role": "system", "content": [{"type": "input_text", "text": system_msg}]},
+                                        {"role": "user", "content": [{"type": "input_text", "text": summary_prompt}]},
+                                    ],
+                                    "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                                    "store": False,
+                                }
+                                final_resp = client.responses.create(**args2)
+                                final_text = getattr(final_resp, "output_text", None) or ""
+                                if final_text.strip():
+                                    output_text = final_text
+                                    response = final_resp
+                                    try:
+                                        setattr(response, "_classic_tools_used", [{"name": "convert_word_to_pdf", "arguments": {"blob": blob_path}, "type": "classic", "direct": True}])
+                                    except Exception:
+                                        pass
+                                    duration_ms = int((time.perf_counter() - started) * 1000)
+                                    # Persist if applicable
+                                    try:
+                                        if user_id and conversation_id:
+                                            cosmos_upsert_conversation_turn(user_id, conversation_id, prompt, output_text)
+                                    except Exception:
+                                        pass
+                                    # Build payload similar to normal flow
+                                    payload = {
+                                        **decision_payload,
+                                        "output_text": output_text,
+                                        "duration_ms": duration_ms,
+                                        "conversation_id": conversation_id,
+                                        "new_conversation": orig_missing_conversation_id,
+                                    }
+                                    try:
+                                        used_tools = getattr(response, "_classic_tools_used", None)
+                                        if isinstance(used_tools, list) and used_tools:
+                                            payload["tool_used"] = used_tools
+                                    except Exception:
+                                        pass
+                                    resp = func.HttpResponse(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
+                                    try:
+                                        if user_id and conversation_id:
+                                            resp.headers["X-Conversation-Id"] = conversation_id
+                                    except Exception:
+                                        pass
+                                    return resp
+            except Exception:
+                pass
             # If classic tools exist, use tool loop to allow auto tools in any mode
             if has_classic_tools:
                 output_text, response = run_responses_with_tools(client, responses_args)
+                # Fallback: if no textual output, retry once without tools to ensure an answer
+                if not output_text:
+                    try:
+                        no_tools_args = dict(responses_args)
+                        no_tools_args.pop("tools", None)
+                        no_tools_args.pop("tool_choice", None)
+                        response = client.responses.create(**no_tools_args)
+                        output_text = getattr(response, "output_text", None) or ""
+                    except Exception:
+                        pass
             else:
                 response = client.responses.create(**responses_args)
                 output_text = getattr(response, "output_text", None) or ""
@@ -375,10 +637,16 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
             **decision_payload,
             "output_text": output_text,
             "duration_ms": duration_ms,
-            "run_id": run_id,
             "conversation_id": conversation_id,
             "new_conversation": orig_missing_conversation_id,
         }
+        # Include classic tool usage when available
+        try:
+            used_tools = getattr(response, "_classic_tools_used", None)
+            if isinstance(used_tools, list) and used_tools:
+                payload["tool_used"] = used_tools
+        except Exception:
+            pass
         resp = func.HttpResponse(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
         try:
             resp.headers["X-Conversation-Id"] = conversation_id
