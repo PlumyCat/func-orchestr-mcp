@@ -69,7 +69,7 @@ def _sanitize_container_name(raw_user_id: str) -> str:
 
 
 def _sanitize_text_for_cosmos(raw: str) -> str:
-    """Sanitize text to avoid Cosmos JSON parser errors like 'unsupported Unicode escape sequence'.
+    r"""Sanitize text to avoid Cosmos JSON parser errors like 'unsupported Unicode escape sequence'.
 
     - Remove any surrogate code points (U+D800..U+DFFF)
     - Neutralize common escape-like sequences (``\u``, ``\U``, ``\x``)
