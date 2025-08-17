@@ -13,7 +13,12 @@ from app.services.memory import get_conversation_messages as cosmos_get_conversa
 from app.services.memory import upsert_conversation_turn as cosmos_upsert_conversation_turn
 from app.services.memory import get_next_memory_id as cosmos_get_next_memory_id
 from app.services.tools import resolve_mcp_config
-from app.services.conversation import build_responses_args, run_responses_with_tools, build_system_message_text
+from app.services.conversation import (
+    build_responses_args,
+    run_responses_with_tools,
+    build_system_message_text,
+    resolve_special_model,
+)
 from app.services.tools import get_builtin_tools_config, execute_tool_call
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -113,6 +118,8 @@ def list_models(req: func.HttpRequest) -> func.HttpResponse:
             "ORCHESTRATOR_MODEL_TOOLS": os.getenv("ORCHESTRATOR_MODEL_TOOLS"),
             "ORCHESTRATOR_MODEL_REASONING": os.getenv("ORCHESTRATOR_MODEL_REASONING"),
             "REASONING_MODELS": os.getenv("REASONING_MODELS"),
+            "MODEL_ROUTER_DEPLOYMENT": os.getenv("MODEL_ROUTER_DEPLOYMENT"),
+            "GPT_OSS_120B_DEPLOYMENT": os.getenv("GPT_OSS_120B_DEPLOYMENT"),
         }
 
         payload = {"deployments": names, "details": details, "env_defaults": env_defaults}
@@ -138,11 +145,13 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
         # Allow model override via body and query param
         qp = getattr(req, 'params', {}) or {}
         body_model = body.get("model") if isinstance(body, dict) else None
-        model = (body_model or qp.get("model") or os.getenv("CHAT_MODEL_DEPLOYMENT_NAME") or "gpt-4o")
+        qp_model = qp.get("model") if qp else None
+        base_default = resolve_special_model(os.getenv("CHAT_MODEL_DEPLOYMENT_NAME"), "gpt-4o")
+        model = resolve_special_model(body_model or qp_model, base_default) or base_default
         # If classic tools are available and caller did not force a model, prefer the tools-capable model
         try:
-            if not body_model and not qp.get("model") and len(get_builtin_tools_config()) > 0:
-                model = os.getenv("ORCHESTRATOR_MODEL_TOOLS", model)
+            if not body_model and not qp_model and len(get_builtin_tools_config()) > 0:
+                model = resolve_special_model(os.getenv("ORCHESTRATOR_MODEL_TOOLS"), model) or model
         except Exception:
             pass
         # Conversation: only when user_id provided
@@ -313,10 +322,18 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
 
 def _orchestrator_models() -> dict:
     return {
-        "trivial": os.getenv("ORCHESTRATOR_MODEL_TRIVIAL", "gpt-5-chat"),
-        "standard": os.getenv("ORCHESTRATOR_MODEL_STANDARD", "gpt-5-chat"),
-        "tools": os.getenv("ORCHESTRATOR_MODEL_TOOLS", "gpt-4.1"),
-        "deep": os.getenv("ORCHESTRATOR_MODEL_REASONING", "gpt-5-mini"),
+        "trivial": resolve_special_model(
+            os.getenv("ORCHESTRATOR_MODEL_TRIVIAL"), "gpt-5-chat"
+        ),
+        "standard": resolve_special_model(
+            os.getenv("ORCHESTRATOR_MODEL_STANDARD"), "gpt-5-chat"
+        ),
+        "tools": resolve_special_model(
+            os.getenv("ORCHESTRATOR_MODEL_TOOLS"), "gpt-4.1"
+        ),
+        "deep": resolve_special_model(
+            os.getenv("ORCHESTRATOR_MODEL_REASONING"), "gpt-5-mini"
+        ),
     }
 
 
