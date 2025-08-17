@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 _cosmos_client = None
@@ -71,7 +72,8 @@ def _sanitize_text_for_cosmos(raw: str) -> str:
     """Sanitize text to avoid Cosmos JSON parser errors like 'unsupported Unicode escape sequence'.
 
     - Remove any surrogate code points (U+D800..U+DFFF)
-    - Neutralize literal backslash-unicode sequences ("\u1234") by doubling the backslash
+    - Neutralize common escape-like sequences (``\u``, ``\U``, ``\x``)
+    - Escape any stray backslashes not followed by a valid JSON escape char
     - Ensure the string is valid UTF-8 by replacing undecodable bytes
     """
     try:
@@ -84,9 +86,16 @@ def _sanitize_text_for_cosmos(raw: str) -> str:
     except Exception:
         pass
     try:
-        # Neutralize literal \uXXXX sequences so the JSON parser does not treat them as escapes
-        # This keeps the original string intention while avoiding invalid escape errors on lone surrogates
-        text = text.replace("\\u", "\\\\u")
+        # Cosmos rejects strings with unrecognized escape sequences, returning
+        # "Unsupported Unicode escape sequence". Double the backslash for
+        # potential escape patterns so the literal text is stored.
+        text = (
+            text.replace("\\u", "\\\\u")
+                .replace("\\U", "\\\\U")
+                .replace("\\x", "\\\\x")
+        )
+        # Escape any remaining backslash not followed by a valid JSON escape char
+        text = re.sub(r"\\(?![\"\\/bfnrtuU])", r"\\\\", text)
     except Exception:
         pass
     try:
