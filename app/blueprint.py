@@ -136,8 +136,10 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
         reasoning_effort = (merged.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT") or "low").lower()
         # Conversation logic only if user_id provided
         user_id = (merged.get("user_id") or qp.get("user_id") or "").strip()
-        conversation_id = (merged.get("conversation_id") or qp.get("conversation_id"))
-        conversation_id = str(conversation_id).strip() if conversation_id else None
+        conversation_id_raw = (merged.get("conversation_id") or qp.get("conversation_id"))
+        conversation_id = str(conversation_id_raw).strip() if conversation_id_raw else None
+        if conversation_id and conversation_id.lower() == "init":
+            conversation_id = None
         new_conversation = False
         input_messages: Optional[List[dict]] = None
         if user_id:
@@ -423,7 +425,8 @@ def mcp_enqueue(req: func.HttpRequest) -> func.HttpResponse:
         # Enrich job body with canonical conversation id if user_id provided and no conversation_id
         try:
             user_id = str((body.get("user_id") or "").strip()) if isinstance(body, dict) else ""
-            if user_id and not str((body.get("conversation_id") or "").strip()):
+            conv_raw = str((body.get("conversation_id") or "").strip()) if isinstance(body, dict) else ""
+            if user_id and (not conv_raw or conv_raw.lower() == "init"):
                 try:
                     mem_id = cosmos_get_next_memory_id(user_id)
                 except Exception:
@@ -529,7 +532,10 @@ def queue_trigger(msg: func.QueueMessage) -> None:
         reasoning_effort = (body.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT") or "low").lower()
         mcp_tool_cfg = resolve_mcp_config(body)
         client = create_llm_client()
-        conversation_id = str((body.get("conversation_id") or "").strip()) or None
+        conversation_id_raw = str((body.get("conversation_id") or "").strip())
+        conversation_id = conversation_id_raw or None
+        if conversation_id and conversation_id.lower() == "init":
+            conversation_id = None
         responses_args: Dict[str, Any] = build_responses_args(
             model, prompt, mcp_tool_cfg, reasoning_effort
         )
@@ -674,7 +680,10 @@ def queue_trigger(msg: func.QueueMessage) -> None:
         # Save full turn memory (optional) when user_id provided
         try:
             user_id = str((body.get("user_id") or "").strip())
-            conversation_id = str((body.get("conversation_id") or "").strip()) or None
+            conversation_id_raw = str((body.get("conversation_id") or "").strip())
+            conversation_id = conversation_id_raw or None
+            if conversation_id and conversation_id.lower() == "init":
+                conversation_id = None
             if user_id and conversation_id:
                 cosmos_upsert_conversation_turn(user_id, conversation_id, prompt, output_text)
         except Exception:
@@ -792,7 +801,10 @@ def mcp_process_direct(req: func.HttpRequest) -> func.HttpResponse:
         reasoning_effort = (job_body.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT") or "low").lower()
         mcp_tool_cfg = resolve_mcp_config(job_body)
         client = create_llm_client()
-        conversation_id = str((job_body.get("conversation_id") or "").strip()) or None
+        conversation_id_raw = str((job_body.get("conversation_id") or "").strip())
+        conversation_id = conversation_id_raw or None
+        if conversation_id and conversation_id.lower() == "init":
+            conversation_id = None
         responses_args: Dict[str, Any] = build_responses_args(model, prompt, mcp_tool_cfg, reasoning_effort)
         # Prefer streaming in direct processing; drop classic tools
         if responses_args.get("tools"):
