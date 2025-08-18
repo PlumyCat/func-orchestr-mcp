@@ -34,7 +34,30 @@ Content-Type: application/json
 
 {
   "prompt": "Say hello and return a short response.",
-  "user_id": "{{user_id}}"
+  "user_id": "{{user_id}}",
+  "model": "gpt-4.1-nano"
+}
+
+### Ask 2 create conversation with memories
+# @name ask2
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Say hello and return a short response.",
+  "user_id": "{{user_id}}",
+  "model": "model-router"
+}
+
+### Ask 2 create conversation with memories
+# @name ask2
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Say hello and return a short response.",
+  "user_id": "{{user_id}}",
+  "model": "gpt-oss-120b"
 }
 
 ### Ask 3 continue conversation
@@ -45,7 +68,8 @@ Content-Type: application/json
 {
   "prompt": "Answer the question: What is the capital of France?",
   "user_id": "{{user_id}}",
-  "conversation_id": "{{conversation_id}}"
+  "conversation_id": "user123_1755474040",
+  "model": "gpt-4.1-nano"
 }
 
 ### Ask 4 select model without reasoning
@@ -76,7 +100,8 @@ Content-Type: application/json
 
 {
   "prompt": "What's the weather like in Paris today?",
-  "model": "gpt-4.1-mini"
+  "user_id": "{{user_id}}",
+  "model": "gpt-4.1-nano"
 }
 
 ### Ask 7 (classic tools) convert Word to PDF
