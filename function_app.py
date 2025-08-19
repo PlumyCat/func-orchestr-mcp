@@ -524,6 +524,17 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
             else:
                 # No history: keep input minimal; do not inject system message to avoid forcing language
                 responses_args["input"] = [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}]
+            # Drop web search unless explicitly allowed
+            try:
+                if not (isinstance(normalized_tools, list) and ("*" in normalized_tools or "search_web" in normalized_tools)):
+                    if responses_args.get("tools"):
+                        responses_args["tools"] = [
+                            t
+                            for t in responses_args["tools"]
+                            if (t.get("name") or t.get("function", {}).get("name")) != "search_web"
+                        ]
+            except Exception:
+                pass
             # If caller restricted allowed_tools, filter classic tools accordingly and optionally force a single tool
             try:
                 if isinstance(normalized_tools, list) and responses_args.get("tools"):

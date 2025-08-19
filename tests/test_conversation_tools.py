@@ -205,3 +205,42 @@ def test_in_progress_polling(monkeypatch):
 
     assert output_text == "final output"
     assert executed == ["search_web"]
+
+
+class FakeCompletedResponses:
+    def create(self, **kwargs):
+        return SimpleNamespace(id="r1", status="completed", output_text="done")
+
+    def wait(self, id, **kwargs):
+        return SimpleNamespace(id="r1", status="completed", output_text="done")
+
+
+class FakeCompletedClient:
+    def __init__(self):
+        self.responses = FakeCompletedResponses()
+
+
+def test_no_websearch_when_not_allowed(monkeypatch):
+    fake_client = FakeCompletedClient()
+    from app.services import tools as tools_module
+    calls = []
+
+    def fake_execute(name, args):
+        calls.append(name)
+        return "unused"
+
+    monkeypatch.setattr(tools_module, "execute_tool_call", fake_execute)
+
+    args = {
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "what is the weather in Paris?"}]}
+        ],
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "store": False,
+    }
+
+    output_text, _ = conversation.run_responses_with_tools(fake_client, args)
+
+    assert output_text == "done"
+    assert calls == []

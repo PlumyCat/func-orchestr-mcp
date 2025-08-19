@@ -125,7 +125,7 @@ def run_responses_with_tools(
     Execute a Responses request that may include classic function tools. Handles the
     requires_action -> submit_tool_outputs loop until completion.
     """
-    from .tools import execute_tool_call, get_builtin_tools_config
+    from .tools import execute_tool_call
     # Never stream here; tool loop requires synchronous handling
     # Ensure using a tools-capable model when tools are attached
     try:
@@ -222,7 +222,7 @@ def run_responses_with_tools(
     # Heuristic realtime fallback: if websearch available but no tool call occurred, and prompt looks realtime, call it directly
     try:
         if allow_post_synthesis and (not executed_any_tool):
-            tools = get_builtin_tools_config()
+            tools = responses_args.get("tools") or []
             # Extract last user text once for heuristics
             user_text: Optional[str] = None
             try:
@@ -244,7 +244,7 @@ def run_responses_with_tools(
             has_search = any((t.get("function", {}).get("name") == "search_web" or t.get("name") == "search_web") for t in tools)
             try:
                 text_l = (user_text or "").lower()
-                realtime_markers = ("météo", "meteo", "weather", "aujourd'hui", "now", "today", "breaking", "news", "actu", "actualité")
+                realtime_markers = ("météo", "meteo", "weather", "forecast", "news", "actualité")
                 if has_search and user_text and any(k in text_l for k in realtime_markers):
                     direct = execute_tool_call("search_web", {"query": user_text})
                     if isinstance(direct, str) and direct.strip():
