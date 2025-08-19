@@ -156,23 +156,26 @@ def run_responses_with_tools(
             response = client.responses.wait(id=resp_id)
     except Exception:
         pass
-    max_loops = 6
+    max_loops = int(os.getenv("MAX_TOOL_LOOPS", "20"))
     executed_any_tool = False
     used_tools: List[Dict[str, Any]] = []
     fallback_text: Optional[str] = None
-    for i in range(max_loops):
+    loops = 0
+    while getattr(response, "status", None) in ("requires_action", "in_progress"):
+        if loops >= max_loops:
+            logging.info("tool loop limit (%d) reached", max_loops)
+            break
         status = getattr(response, "status", None)
-        logging.debug("tool loop iteration %d status=%s", i + 1, status)
+        logging.debug("tool loop iteration %d status=%s", loops + 1, status)
         if status == "in_progress":
             try:
                 resp_id = getattr(response, "id", None)
                 if resp_id is not None:
                     response = client.responses.wait(id=resp_id)
-                continue
             except Exception:
                 break
-        if status != "requires_action":
-            break
+            loops += 1
+            continue
         required = getattr(response, "required_action", None)
         submit = getattr(required, "submit_tool_outputs", None) if required else None
         calls = getattr(submit, "tool_calls", None) if submit else None
@@ -184,7 +187,7 @@ def run_responses_with_tools(
                 call_id = getattr(call, "id", None) or ""
                 call_type = (getattr(call, "type", None) or "function").lower()
                 if call_type == "mcp":
-                    logging.info("approving mcp call id='%s' in iteration %d", call_id, i + 1)
+                    logging.info("approving mcp call id='%s' in iteration %d", call_id, loops + 1)
                     tool_outputs.append({"tool_call_id": call_id, "output": ""})
                     executed_any_tool = True
                     try:
@@ -203,7 +206,7 @@ def run_responses_with_tools(
                     args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
                 except Exception:
                     args = {}
-                logging.info("executing tool '%s' in iteration %d", name, i + 1)
+                logging.info("executing tool '%s' in iteration %d", name, loops + 1)
                 output = execute_tool_call(name, args, tool_context)
                 tool_outputs.append({"tool_call_id": call_id, "output": output})
                 executed_any_tool = True
@@ -224,9 +227,7 @@ def run_responses_with_tools(
                 response = client.responses.wait(id=resp_id)
         except Exception:
             pass
-    else:
-        if getattr(response, "status", None) in ("requires_action", "in_progress"):
-            logging.warning("maximum tool iterations (%d) reached", max_loops)
+        loops += 1
     output_text = getattr(response, "output_text", None)
     # Heuristic realtime fallback: if websearch available but no tool call occurred, and prompt looks realtime, call it directly
     try:
