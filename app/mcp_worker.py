@@ -264,7 +264,7 @@ def mcp_process_worker(msg: func.QueueMessage) -> None:
             # Create context with user_id for tools
             tool_context = {"user_id": user_id} if user_id else None
             output_text, response = run_responses_with_tools(
-                client, responses_args, tool_context=tool_context
+                client, responses_args, tool_context, allow_post_synthesis=True
             )
             
             # Log the final output for debugging
