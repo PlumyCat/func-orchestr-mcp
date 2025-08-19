@@ -108,3 +108,14 @@ Content-Type: application/json
   "stream": true,
   "debug": true
 }
+
+### MCP Run 9 - Hello tool without user_id
+# @name mcp_run_hello_no_user
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "Hi, try testing the `hello_mcp` tool.",
+  "allowed_tools": "hello_mcp",
+  "stream": false
+}
