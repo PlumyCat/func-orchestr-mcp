@@ -14,6 +14,7 @@ class FakeResponses:
     def __init__(self, model):
         self.model = model
         self.submit_models = []
+        self._store = {}
 
     def create(self, **kwargs):
         call = SimpleNamespace(
@@ -22,7 +23,9 @@ class FakeResponses:
         )
         submit = SimpleNamespace(tool_calls=[call])
         required = SimpleNamespace(submit_tool_outputs=submit)
-        return SimpleNamespace(id="resp1", status="requires_action", required_action=required)
+        resp = SimpleNamespace(id="resp1", status="requires_action", required_action=required)
+        self._store[resp.id] = resp
+        return resp
 
     def submit_tool_outputs(self, response_id, tool_outputs, model=None):
         # record model parameter used for submit
@@ -36,9 +39,15 @@ class FakeResponses:
             )
             submit = SimpleNamespace(tool_calls=[call])
             required = SimpleNamespace(submit_tool_outputs=submit)
-            return SimpleNamespace(id="resp2", status="requires_action", required_action=required)
-        # final response
-        return SimpleNamespace(id="resp3", status="completed", output_text="final output")
+            resp = SimpleNamespace(id="resp2", status="requires_action", required_action=required)
+        else:
+            # final response
+            resp = SimpleNamespace(id="resp3", status="completed", output_text="final output")
+        self._store[resp.id] = resp
+        return resp
+
+    def wait(self, id, **kwargs):
+        return self._store[id]
 
 
 class FakeClient:
@@ -80,12 +89,15 @@ def test_multiple_tool_iterations_with_special_models(model_name, caplog, monkey
 class FakeMCPResponses:
     def __init__(self):
         self.submissions = []
+        self._store = {}
 
     def create(self, **kwargs):
         call = SimpleNamespace(id="mcp-call1", type="mcp", mcp=SimpleNamespace(method="one"))
         submit = SimpleNamespace(tool_calls=[call])
         required = SimpleNamespace(submit_tool_outputs=submit)
-        return SimpleNamespace(id="resp1", status="requires_action", required_action=required)
+        resp = SimpleNamespace(id="resp1", status="requires_action", required_action=required)
+        self._store[resp.id] = resp
+        return resp
 
     def submit_tool_outputs(self, response_id, tool_outputs, model=None):
         self.submissions.append((response_id, tool_outputs))
@@ -93,8 +105,14 @@ class FakeMCPResponses:
             call = SimpleNamespace(id="mcp-call2", type="mcp", mcp=SimpleNamespace(method="two"))
             submit = SimpleNamespace(tool_calls=[call])
             required = SimpleNamespace(submit_tool_outputs=submit)
-            return SimpleNamespace(id="resp2", status="requires_action", required_action=required)
-        return SimpleNamespace(id="resp3", status="completed", output_text="mcp done")
+            resp = SimpleNamespace(id="resp2", status="requires_action", required_action=required)
+        else:
+            resp = SimpleNamespace(id="resp3", status="completed", output_text="mcp done")
+        self._store[resp.id] = resp
+        return resp
+
+    def wait(self, id, **kwargs):
+        return self._store[id]
 
 
 class FakeMCPClient:
@@ -129,3 +147,61 @@ def test_mcp_tool_loop(monkeypatch):
     assert len(fake_client.responses.submissions) == 2
     assert all(len(outs) == 1 for _, outs in fake_client.responses.submissions)
     assert called == []
+
+
+class FakeInProgressResponses:
+    def __init__(self):
+        self.stage = 0
+
+    def create(self, **kwargs):
+        return SimpleNamespace(id="resp-initial", status="in_progress")
+
+    def wait(self, id, **kwargs):
+        if id == "resp-initial" and self.stage == 0:
+            self.stage = 1
+            call = SimpleNamespace(
+                id="call-search",
+                function=SimpleNamespace(name="search_web", arguments=json.dumps({"query": "hello"})),
+            )
+            submit = SimpleNamespace(tool_calls=[call])
+            required = SimpleNamespace(submit_tool_outputs=submit)
+            return SimpleNamespace(id="resp-initial", status="requires_action", required_action=required)
+        if id == "resp-after-submit" and self.stage == 2:
+            self.stage = 3
+            return SimpleNamespace(id="resp-after-submit", status="completed", output_text="final output")
+        return SimpleNamespace(id=id, status="completed")
+
+    def submit_tool_outputs(self, response_id, tool_outputs, model=None):
+        self.stage = 2
+        return SimpleNamespace(id="resp-after-submit", status="in_progress")
+
+
+class FakeInProgressClient:
+    def __init__(self):
+        self.responses = FakeInProgressResponses()
+
+
+def test_in_progress_polling(monkeypatch):
+    fake_client = FakeInProgressClient()
+    from app.services import tools as tools_module
+    executed = []
+
+    def fake_execute(name, args):
+        executed.append(name)
+        return "search-result"
+
+    monkeypatch.setattr(tools_module, "execute_tool_call", fake_execute)
+
+    args = {
+        "model": "gpt-4.1",
+        "input": [],
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "store": False,
+    }
+
+    output_text, _ = conversation.run_responses_with_tools(
+        fake_client, args, allow_post_synthesis=False
+    )
+
+    assert output_text == "final output"
+    assert executed == ["search_web"]
