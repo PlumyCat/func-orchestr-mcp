@@ -4,15 +4,15 @@
 
 Voici quelques diagrammes pour illustrer l'architecture et les flux principaux du projet :
 
-![Flux HTTP Ask](ask-http-flow.png)
+![Flux HTTP Ask](images/ask-http-flow.png)
 
-![Modèle mémoire Cosmos](mcp_Cosmos-memory-model.png)
+![Modèle mémoire Cosmos](images/mcp_Cosmos-memory-model.png)
 
-![Endpoints MCP](mcp_endpoints-flow.png)
+![Endpoints MCP](images/mcp_endpoints-flow.png)
 
-![Flux HTTP Orchestrations](mcp_orchestrations-http-flow.png)
+![Flux HTTP Orchestrations](images/mcp_orchestrations-http-flow.png)
 
-![Flux Jobs Orchestrations](mcp_orchestrations-jobs-flow.png)
+![Flux Jobs Orchestrations](images/mcp_orchestrations-jobs-flow.png)
 
 ## Chat using Azure OpenAI (Python v2 Function) + MCP Orchestration
 
