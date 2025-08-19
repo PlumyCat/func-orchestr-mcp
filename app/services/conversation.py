@@ -106,6 +106,12 @@ def run_with_optional_stream(client, responses_args: Dict[str, Any], stream: boo
         except Exception:
             logging.exception("streaming error; fallback to non-stream")
     resp = client.responses.create(**responses_args)
+    try:
+        resp_id = getattr(resp, "id", None)
+        if resp_id is not None:
+            resp = client.responses.wait(id=resp_id)
+    except Exception:
+        pass
     output_text = getattr(resp, "output_text", None)
     return output_text, resp
 
@@ -135,6 +141,12 @@ def run_responses_with_tools(
         internal_user_id = None
     model_name = responses_args.get("model")
     response = client.responses.create(**responses_args)
+    try:
+        resp_id = getattr(response, "id", None)
+        if resp_id is not None:
+            response = client.responses.wait(id=resp_id)
+    except Exception:
+        pass
     max_loops = 6
     executed_any_tool = False
     used_tools: List[Dict[str, Any]] = []
@@ -142,6 +154,14 @@ def run_responses_with_tools(
     for i in range(max_loops):
         status = getattr(response, "status", None)
         logging.debug("tool loop iteration %d status=%s", i + 1, status)
+        if status == "in_progress":
+            try:
+                resp_id = getattr(response, "id", None)
+                if resp_id is not None:
+                    response = client.responses.wait(id=resp_id)
+                continue
+            except Exception:
+                break
         if status != "requires_action":
             break
         required = getattr(response, "required_action", None)
@@ -189,8 +209,14 @@ def run_responses_with_tools(
         if model_name:
             submit_kwargs["model"] = model_name
         response = client.responses.submit_tool_outputs(**submit_kwargs)
+        try:
+            resp_id = getattr(response, "id", None)
+            if resp_id is not None:
+                response = client.responses.wait(id=resp_id)
+        except Exception:
+            pass
     else:
-        if getattr(response, "status", None) == "requires_action":
+        if getattr(response, "status", None) in ("requires_action", "in_progress"):
             logging.warning("maximum tool iterations (%d) reached", max_loops)
     output_text = getattr(response, "output_text", None)
     # Heuristic realtime fallback: if websearch available but no tool call occurred, and prompt looks realtime, call it directly
