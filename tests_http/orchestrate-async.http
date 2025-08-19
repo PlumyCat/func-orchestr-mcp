@@ -1,0 +1,87 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+@user_id = user123
+@copilot_job_id = 
+
+### Orchestrate Start Job 1 - Simple task
+# @name copilot_start_simple
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "Explain Azure Functions in 3 bullet points",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "*",
+  "reasoning_effort": "low"
+}
+
+### Orchestrate Start Job 2 - With tools (websearch)
+# @name copilot_start_tools
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "What's the weather like in Paris today?",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "websearch",
+  "reasoning_effort": "medium"
+}
+
+### Orchestrate Start Job 3 - Classic tools (documents)
+# @name copilot_start_classic
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "List my templates in storage",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "list_templates_http",
+  "reasoning_effort": "low"
+}
+
+### Orchestrate Start Job 4 - Reasoning task
+# @name copilot_start_reasoning
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "Analysez en détail les avantages et inconvénients des microservices par rapport à une architecture monolithique. Fournissez une stratégie de migration étape par étape.",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "",
+  "reasoning_effort": "high"
+}
+
+### Orchestrate Start Job 5 - Web search
+# @name copilot_start_websearch
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "What are the latest updates in Azure Functions pricing for 2024?",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "search_web",
+  "reasoning_effort": "low"
+}
+
+### Orchestrate Status - Manual job ID
+# @name copilot_status
+GET {{host}}/api/orchestrate/status?job_id={{copilot_job_id}}
+Accept: application/json
+
+### Orchestrate Status - Auto job ID from previous request
+# @name copilot_status_auto
+GET {{host}}/api/orchestrate/status?job_id={{copilot_start_simple.response.body.job_id}}
+Accept: application/json
+
+### Orchestrate Status - Auto job ID from previous request With tools (websearch)
+# @name copilot_status_auto
+GET {{host}}/api/orchestrate/status?job_id={{copilot_start_tools.response.body.job_id}}
+Accept: application/json

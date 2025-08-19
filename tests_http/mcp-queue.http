@@ -1,0 +1,28 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+@job_id = 
+
+### MCP Enqueue - Add job to queue
+# @name mcp_enqueue
+POST {{host}}/api/mcp-enqueue
+Content-Type: application/json
+
+{
+  "prompt": "Generate a concise checklist for onboarding a new developer.",
+  "model": "gpt-4.1-mini",
+  "stream": true,
+  "allowed_tools": "*"
+}
+
+### MCP Result - Poll job status/result (manual job ID)
+# @name mcp_result
+GET {{host}}/api/mcp-result?job_id={{job_id}}&return_partial_output=true
+Accept: application/json
+
+### MCP Result - Poll job status/result (auto job ID from enqueue)
+# @name mcp_result_auto
+GET {{host}}/api/mcp-result?job_id={{mcp_enqueue.response.body.job_id}}&return_partial_output=true
+Accept: application/json

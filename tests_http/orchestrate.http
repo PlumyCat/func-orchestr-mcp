@@ -1,0 +1,135 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+@user_id = user123
+
+### Orchestrate 1 - Trivial mode (no tools, no reasoning)
+# @name orchestrate1
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Summarize the advantages of Azure Functions in 3 bullet points.",
+  "prefer_reasoning": false
+}
+
+### Orchestrate 2 - Deep mode with reasoning
+# @name orchestrate2
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Find key considerations for deploying Azure Functions to production.",
+  "prefer_reasoning": true
+}
+
+### Orchestrate 3 - Tools mode (check decision only, no execution)
+# @name orchestrate3
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Hi, try testing the `hello_mcp` tool.",
+  "prefer_reasoning": false,
+  "allowed_tools": "hello_mcp",
+  "user_id": "{{user_id}}",
+  "execute": false
+}
+
+### Orchestrate 4 - Tools mode (list all tools)
+# @name orchestrate4
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "list all tools available.",
+  "prefer_reasoning": false,
+  "allowed_tools": "*",
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 5 - Deep mode with tools and reasoning
+# @name orchestrate5
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "list all tools available.",
+  "prefer_reasoning": true,
+  "allowed_tools": "*",
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 6 - Classic tools (list all tools including doc service)
+# @name orchestrate6
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "List all available tools and briefly explain each.",
+  "prefer_reasoning": false,
+  "allowed_tools": "*",
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 7 - Classic tools (convert Word to PDF)
+# @name orchestrate7
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "use convert_word_to_pdf tool on 'new.docx'",
+  "prefer_reasoning": false,
+  "allowed_tools": ["convert_word_to_pdf"],
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 8 - Classic tools (init user container)
+# @name orchestrate8
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Initialize the user's blob container.",
+  "prefer_reasoning": false,
+  "allowed_tools": ["init_user"],
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 9 - Classic tools (list images)
+# @name orchestrate9
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "prefer_reasoning": false,
+  "allowed_tools": ["list_images"],
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 10 - Classic tools (list shared templates)
+# @name orchestrate10
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "List shared templates available to everyone.",
+  "prefer_reasoning": false,
+  "allowed_tools": ["list_shared_templates"],
+  "user_id": "{{user_id}}"
+}
+
+### Orchestrate 11 - Classic tools (list my templates)
+# @name orchestrate11
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "List my templates in storage.",
+  "prefer_reasoning": false,
+  "allowed_tools": ["list_templates_http"],
+  "user_id": "{{user_id}}"
+}

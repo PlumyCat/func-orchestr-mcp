@@ -1,0 +1,9 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+### Ping - Health check endpoint
+# @name ping
+GET {{host}}/api/ping
+Accept: application/json

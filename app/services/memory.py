@@ -11,7 +11,7 @@ _cosmos_db = None
 
 def _quiet_azure_sdk_logs() -> None:
     try:
-        sdk_level = os.getenv("AZURE_SDK_LOG_LEVEL", "WARNING").upper()
+        sdk_level = "WARNING"
         level = getattr(logging, sdk_level, logging.WARNING)
     except Exception:
         level = logging.WARNING
@@ -216,9 +216,7 @@ def _final_cosmos_scrub(doc: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             raw_json = json.dumps(sanitized, ensure_ascii=True)
 
-        # Optional: aggressively double *all* valid \uXXXX sequences if env flag set
-        if os.getenv("ALWAYS_DOUBLE_UNICODE_ESCAPES", "0").lower() in ("1", "true", "yes", "on"):
-            raw_json = re.sub(
+        raw_json = re.sub(
                 r"(?<!\\)(\\u[0-9a-fA-F]{4})", r"\\\\\\1", raw_json)
 
         try:

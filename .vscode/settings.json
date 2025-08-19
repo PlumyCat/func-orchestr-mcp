@@ -4,5 +4,10 @@
     "azureFunctions.pythonVenv": ".venv",
     "azureFunctions.projectLanguage": "Python",
     "azureFunctions.projectRuntime": "~4",
-    "debug.internalConsoleOptions": "neverOpen"
+    "debug.internalConsoleOptions": "neverOpen",
+    "azureStorage.azuriteLocation": "./azurite-data",
+    "azureStorage.azuriteWorkspace": "./azurite-data",
+    "azureStorage.azuriteBlobPort": 10000,
+    "azureStorage.azuriteQueuePort": 10001,
+    "azureStorage.azuriteTablePort": 10002
 }

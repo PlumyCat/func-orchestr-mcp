@@ -1,0 +1,9 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+### Models - Get available deployments
+# @name models
+GET {{host}}/api/models
+Accept: application/json

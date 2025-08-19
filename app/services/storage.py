@@ -18,11 +18,11 @@ def get_storage_clients() -> Dict[str, Any]:
         )
     if not conn_str:
         raise RuntimeError("Missing AzureWebJobsStorage connection string.")
-    queue_name = os.getenv("MCP_JOBS_QUEUE", "mcpjobs")
+    queue_name = "mcpjobs"
     return {
         "queue": QueueClient.from_connection_string(conn_str, queue_name=queue_name),
         "blob": BlobServiceClient.from_connection_string(conn_str),
-        "container": os.getenv("MCP_JOBS_CONTAINER", "jobs"),
+        "container": "jobs",
     }
 
 

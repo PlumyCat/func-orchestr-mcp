@@ -1,0 +1,110 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+@user_id = user123
+@conversation_id = 
+
+### MCP Run 1 - List all available tools
+# @name mcp_run_tools_list
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "List all available tools and briefly explain each.",
+  "allowed_tools": "*",
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run 2 - Convert Word to PDF
+# @name mcp_run_convert_word_to_pdf
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "Convert this document to PDF: https://example.com/sample.docx",
+  "allowed_tools": ["convert_word_to_pdf"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run 3 - Initialize user container
+# @name mcp_run_init_user
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "Initialize the user's blob container.",
+  "allowed_tools": ["init_user"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run 4 - List images
+# @name mcp_run_list_images
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "allowed_tools": ["list_images"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run 5 - List shared templates
+# @name mcp_run_list_shared_templates
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "List shared templates available to everyone.",
+  "allowed_tools": ["list_shared_templates"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run 6 - List my templates
+# @name mcp_run_list_templates
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "List my templates in storage.",
+  "allowed_tools": ["list_templates_http"],
+  "stream": false,
+  "user_id": "{{user_id}}"
+}
+
+### MCP Run 7 - Production deployment considerations
+# @name mcp_run_production
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "Find key considerations for deploying Azure Functions to production.",
+  "model": "",
+  "require_approval": false,
+  "allowed_tools": "*",
+  "stream": false,
+  "debug": false,
+  "reasoning_effort": "low",
+  "user_id": "{{user_id}}",
+  "conversation_id": "{{conversation_id}}"
+}
+
+### MCP Run 8 - Create document with streaming and debug
+# @name mcp_run_create_doc
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "create a new document new_test.docx",
+  "model": "gpt-4.1-mini",
+  "require_approval": false,
+  "allowed_tools": "*",
+  "stream": true,
+  "debug": true
+}

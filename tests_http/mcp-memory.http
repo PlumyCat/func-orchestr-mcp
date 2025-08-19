@@ -1,0 +1,17 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+@user_id = user123
+@memory_id = 
+
+### MCP Memories - List memories
+# @name mcp_memories
+GET {{host}}/api/mcp-memories?user_id={{user_id}}&limit=10
+Accept: application/json
+
+### MCP Memory - Get specific memory by ID
+# @name mcp_memory
+GET {{host}}/api/mcp-memory?user_id={{user_id}}&memory_id={{memory_id}}
+Accept: application/json

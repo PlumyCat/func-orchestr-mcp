@@ -2,3 +2,28 @@
 swagger_power_apps.json
 swagger_power_apps.yaml
 test local.http
+azurite-data/
+tests_http/
+tests/
+images/
+Connecteur PowerApps/
+.pytest_cache/
+.devcontainer/
+.claude/
+# Azurite storage directories
+__blobstorage__/
+__queuestorage__/
+
+# Azurite database files
+__azurite_db*.json
+
+# Documentation and scripts
+README.md
+QUEUE_MANAGEMENT.md
+AZURITE.md
+reset_queues.py
+local.settings.json
+*.sh
+
+# Python cache
+__pycache__/

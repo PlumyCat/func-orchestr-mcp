@@ -43,8 +43,9 @@ __pycache__/
 *$py.class
 
 # Azurite artifacts
-__blobstorage__
-__queuestorage__
-__azurite_db*__.json
-.azure
+__blobstorage__/
+__queuestorage__/
+__azurite_db*.json
+.azure/
+azurite-data/
 local.settings.json

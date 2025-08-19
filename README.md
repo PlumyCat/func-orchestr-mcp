@@ -16,7 +16,98 @@ Voici quelques diagrammes pour illustrer l'architecture et les flux principaux d
 
 ## Chat using Azure OpenAI (Python v2 Function) + MCP Orchestration
 
-This project demonstrates how to build a Python Azure Functions app that interacts with Azure OpenAI and orchestrates tools via the Model Context Protocol (MCP). It includes a simple `/api/ask` endpoint, several `/api/mcp-*` endpoints for tool execution, and optional chat endpoints backed by assistant bindings.
+This project demonstrates how to build a Python Azure Functions app that interacts with Azure OpenAI and orchestrates tools via the Model Context Protocol (MCP). It includes both synchronous and asynchronous streaming endpoints for different use cases.
+
+## Architecture des Endpoints
+
+Le projet offre **6 modes d'utilisation** distincts :
+
+### 🔄 **Endpoints Synchrones (Réponse immédiate)**
+
+**1. `POST /api/ask`** - Choix manuel du modèle
+- Permet de spécifier explicitement le modèle à utiliser
+- Supporte les classic tools intégrés
+- Gestion des conversations avec mémoire
+- Réponse immédiate (pas de streaming)
+
+**2. `POST /api/orchestrate`** - Sélection automatique optimale
+- Analyse automatique du prompt pour choisir le meilleur modèle
+- Modes : trivial/standard/tools/deep selon complexité
+- Supporte reasoning effort (low/medium/high)
+- Réponse immédiate (pas de streaming)
+
+**3. `POST /api/mcp-run`** - Outils MCP seulement
+- Focus sur les outils MCP uniquement
+- Pas compatible Copilot Studio (pas de streaming)
+- Usage avancé pour intégrations spécifiques
+
+### ⚡ **Endpoints Asynchrones Streaming (Job + Polling)**
+
+**4. `POST /api/ask/start` + `GET /api/ask/status`** - ASK Streaming
+- Version streaming de `/api/ask`
+- Choix manuel du modèle avec progress en temps réel
+- Messages contextuels : "Génération en cours…", "Utilisation d'outil…"
+
+**5. `POST /api/orchestrate/start` + `GET /api/orchestrate/status`** - ORCHESTRATE Streaming  
+- Version streaming de `/api/orchestrate`
+- Sélection automatique + reasoning avec progress
+- Compatible **Copilot Studio** (< 30s response + polling)
+- Messages contextuels : "Analyse et sélection du modèle…", "Réflexion approfondie…"
+
+**6. `POST /api/mcp-enqueue` + `GET /api/mcp-result`** - MCP Streaming
+- Outils MCP en streaming
+- Progress détaillé pendant l'exécution des tools
+- Messages spécialisés selon l'outil utilisé
+
+### 🧠 **Gestion Mémoire Conversations**
+
+**7. `GET /api/mcp-memories`** - Liste des conversations  
+**8. `GET /api/mcp-memory`** - Détail d'une conversation
+
+---
+
+## Flux Streaming & Messages Contextuels
+
+Les endpoints streaming fournissent des messages de statut intelligents :
+
+| Type d'activité | Message affiché | Status |
+|------------------|-----------------|---------|
+| **Réflexion/Reasoning** | "Analyse et réflexion en cours…" | `running` |
+| **Génération simple** | "Génération de la réponse…" | `running` |
+| **Recherche web** | "Recherche web en cours…" | `tool` |
+| **Accès documents** | "Accès aux documents…" | `tool` |
+| **Outil spécifique** | "Utilisation de l'outil: {nom}" | `tool` |
+| **Terminé** | "Terminé" | `completed` |
+| **Erreur** | "Erreur: {détails}" | `failed` |
+
+### Format de Réponse Streaming
+
+**Start (< 30s):**
+```json
+{
+  "ok": true,
+  "job_id": "uuid",
+  "status": "queued", 
+  "message": "Préparation...",
+  "progress": 0,
+  "mode": "orchestrate|ask|mcp",
+  "selected_model": "gpt-4.1-mini",
+  "retry_after_sec": 3
+}
+```
+
+**Status (Polling):**
+```json
+{
+  "ok": true,
+  "job_id": "uuid",
+  "status": "running|tool|completed|failed",
+  "message": "Message contextuel intelligent",
+  "progress": 65,
+  "tool": "websearch",
+  "final_text": "Réponse finale si terminé"
+}
+```
 
 ## Run on your local environment
 

@@ -19,40 +19,13 @@ def create_llm_client():
         return AzureOpenAI(
             azure_endpoint=azure_endpoint,
             api_key=azure_key,
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview"),
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
         )
 
     openai_key = os.getenv("OPENAI_API_KEY")
     if not openai_key:
         raise RuntimeError("Missing OPENAI_API_KEY or AZURE_OPENAI_* settings.")
     return OpenAI(api_key=openai_key)
-
-
-def resolve_special_model(model: Optional[str], fallback: Optional[str] = None) -> Optional[str]:
-    """Translate special aliases to concrete deployment names.
-
-    If an alias is provided but the corresponding environment variable is unset,
-    return the fallback so classic models still work.
-    """
-    if model == "model-router":
-        return os.getenv("MODEL_ROUTER_DEPLOYMENT") or fallback
-    if model == "gpt-oss-120b":
-        return os.getenv("GPT_OSS_120B_DEPLOYMENT") or fallback
-    return model or fallback
-
-
-def select_model_and_effort(
-    prompt: str, default_model: Optional[str] = None, default_effort: str = "low"
-) -> Tuple[str, str]:
-    base_default = resolve_special_model(os.getenv("AZURE_OPENAI_MODEL"), "gpt-5-mini")
-    model = resolve_special_model(default_model, base_default) or base_default
-    effort = default_effort
-    # Heuristique simple (placeholder) : on peut brancher un parser RULES plus tard
-    if len(prompt) < 160:
-        effort = os.getenv("DEFAULT_REASONING_EFFORT", effort)
-    else:
-        effort = os.getenv("DEFAULT_REASONING_EFFORT", effort)
-    return model, effort
 
 
 def _parse_reasoning_models() -> List[str]:
@@ -66,9 +39,15 @@ def _supports_reasoning(model: str) -> bool:
     allow_list = _parse_reasoning_models()
     if allow_list:
         return model in allow_list
-    # Fallback heuristic: only explicitly known reasoning families
+
     lower = (model or "").lower()
-    return lower.startswith("o3") or lower.startswith("o4") or ("-r" in lower)
+    return (
+        lower.startswith("o3") or
+        lower.startswith("o4") or
+        lower.startswith("gpt-5-mini") or
+        lower.startswith("gpt-5-nano") or
+        ("-r" in lower)
+    )
 
 
 def build_responses_args(
@@ -78,9 +57,15 @@ def build_responses_args(
     reasoning_effort: str,
 ) -> Dict[str, Any]:
     from .tools import get_builtin_tools_config
+    
+    # Always include system message
+    system_msg = build_system_message_text()
     args: Dict[str, Any] = {
         "model": model,
-        "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+        "input": [
+            {"role": "system", "content": [{"type": "input_text", "text": system_msg}]},
+            {"role": "user", "content": [{"type": "input_text", "text": prompt}]}
+        ],
         "text": {"format": {"type": "text"}, "verbosity": "medium"},
         "store": False,
     }
@@ -139,7 +124,7 @@ def run_responses_with_tools(
     # Ensure using a tools-capable model when tools are attached
     try:
         if responses_args.get("tools") and not responses_args.get("model"):
-            responses_args["model"] = os.getenv("ORCHESTRATOR_MODEL_TOOLS", responses_args.get("model", "gpt-4.1"))
+            responses_args["model"] = os.getenv("ORCHESTRATOR_MODEL_TOOLS", responses_args.get("model"))
     except Exception:
         pass
     # Extract internal-only fields that must not be sent to the API
@@ -201,8 +186,6 @@ def run_responses_with_tools(
                 logging.exception("tool execution failed; returning error text to model")
                 tool_outputs.append({"tool_call_id": getattr(call, "id", ""), "output": "Tool execution failed."})
         submit_kwargs = {"response_id": getattr(response, "id", None), "tool_outputs": tool_outputs}
-        if model_name in ("model-router", "gpt-oss-120b"):
-            submit_kwargs["model"] = model_name
         response = client.responses.submit_tool_outputs(**submit_kwargs)
     else:
         if getattr(response, "status", None) == "requires_action":
@@ -445,7 +428,6 @@ def _load_system_prompt_markdown() -> str:
 
     - SYSTEM_PROMPT_PATH: local file path (default: "system_prompt.md")
     - SYSTEM_PROMPT_URL: optional remote URL to fetch markdown
-    - SYSTEM_PROMPT_TTL_SECONDS: cache TTL for remote fetch (default: 300)
 
     Supports token replacement: {{today}} will be replaced with ISO date.
     Fallbacks to a minimal built-in prompt if nothing is configured.
@@ -457,7 +439,7 @@ def _load_system_prompt_markdown() -> str:
     if url:
         try:
             import time as _time  # local alias
-            ttl = int(os.getenv("SYSTEM_PROMPT_TTL_SECONDS", "300"))
+            ttl = int("300")
             now = _time.time()
             if _SYSTEM_PROMPT_CACHE is not None and _SYSTEM_PROMPT_FETCHED_AT and (now - _SYSTEM_PROMPT_FETCHED_AT < max(5, ttl)):
                 return _SYSTEM_PROMPT_CACHE.replace("{{today}}", today)
@@ -477,7 +459,7 @@ def _load_system_prompt_markdown() -> str:
         except Exception:
             pass
     # Local file next
-    path = os.getenv("SYSTEM_PROMPT_PATH", "system_prompt.md")
+    path = "system_prompt.md"
     try:
         if path and os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:

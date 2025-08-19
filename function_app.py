@@ -17,7 +17,6 @@ from app.services.conversation import (
     build_responses_args,
     run_responses_with_tools,
     build_system_message_text,
-    resolve_special_model,
 )
 from app.services.tools import get_builtin_tools_config, execute_tool_call
 
@@ -30,11 +29,18 @@ try:
 except Exception as e:
     logging.warning(f"MCP blueprint not registered: {e}")
 
+# Register MCP Worker (Copilot async) via Blueprint
+try:
+    from app.mcp_worker import bp as mcp_worker_bp
+    app.register_functions(mcp_worker_bp)
+except Exception as e:
+    logging.warning(f"MCP worker blueprint not registered: {e}")
+
 
 def _get_aoai_client() -> AzureOpenAI:
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     api_key = os.getenv("AZURE_OPENAI_KEY")
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    api_version = os.getenv("AZURE_OPENAI_API_VERSION")
     if not endpoint:
         raise RuntimeError("Missing AZURE_OPENAI_ENDPOINT")
     if not api_key:
@@ -46,7 +52,7 @@ def _get_aoai_client() -> AzureOpenAI:
 @app.function_name("ping")
 @app.route(route="ping", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def ping(req: func.HttpRequest) -> func.HttpResponse:
-    return func.HttpResponse(json.dumps({"status": "ok"}), mimetype="application/json")
+    return func.HttpResponse(json.dumps({"status": "ok"}, ensure_ascii=False), mimetype="application/json")
 
 
 # List available deployments (subscribed models) from Azure OpenAI
@@ -58,15 +64,15 @@ def list_models(req: func.HttpRequest) -> func.HttpResponse:
         # Requires Managed Identity or Service Principal with Reader on the OpenAI resource
         qp = getattr(req, 'params', {}) or {}
         # Prefer env vars; allow fallback to query params and also accept plain names in env for convenience
-        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID") or os.getenv("subscriptionId") or qp.get('subscriptionId')
-        rg_name = os.getenv("AZURE_RESOURCE_GROUP") or os.getenv("resourceGroup") or qp.get('resourceGroup')
-        account_name = os.getenv("AZURE_OPENAI_RESOURCE_NAME") or os.getenv("accountName") or qp.get('accountName')
+        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID") 
+        rg_name = os.getenv("AZURE_RESOURCE_GROUP") 
+        account_name = os.getenv("AZURE_OPENAI_RESOURCE_NAME") 
         if not sub_id or not rg_name or not account_name:
             return func.HttpResponse(
                 json.dumps({
                     "error": "Missing AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, or AZURE_OPENAI_RESOURCE_NAME.",
                     "hint": "Provide them as env vars or query params subscriptionId, resourceGroup, accountName"
-                }),
+                }, ensure_ascii=False),
                 status_code=400,
                 mimetype="application/json",
             )
@@ -75,13 +81,13 @@ def list_models(req: func.HttpRequest) -> func.HttpResponse:
             from azure.identity import DefaultAzureCredential  # type: ignore
             import requests  # type: ignore
         except Exception as e:
-            return func.HttpResponse(json.dumps({"error": f"Missing dependencies: {e}"}), status_code=500, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": f"Missing dependencies: {e}"}, ensure_ascii=False), status_code=500, mimetype="application/json")
         # Acquire ARM token
         try:
             credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
             token = credential.get_token("https://management.azure.com/.default").token
         except Exception as e:
-            return func.HttpResponse(json.dumps({"error": f"Failed to acquire AAD token: {e}"}), status_code=500, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": f"Failed to acquire AAD token: {e}"}, ensure_ascii=False), status_code=500, mimetype="application/json")
         api_version_mgmt = os.getenv("AZURE_OPENAI_MGMT_API_VERSION", "2023-05-01")
         mgmt_url = (
             f"https://management.azure.com/subscriptions/{sub_id}/resourceGroups/{rg_name}"
@@ -92,7 +98,7 @@ def list_models(req: func.HttpRequest) -> func.HttpResponse:
             r.raise_for_status()
             payload_json = r.json()
         except Exception as e:
-            return func.HttpResponse(json.dumps({"error": f"ARM deployments list failed: {e}"}), status_code=500, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": f"ARM deployments list failed: {e}"}, ensure_ascii=False), status_code=500, mimetype="application/json")
 
         value = payload_json.get("value") if isinstance(payload_json, dict) else None
         names = []
@@ -112,20 +118,18 @@ def list_models(req: func.HttpRequest) -> func.HttpResponse:
             })
 
         env_defaults = {
-            "CHAT_MODEL_DEPLOYMENT_NAME": os.getenv("CHAT_MODEL_DEPLOYMENT_NAME"),
+            "AZURE_OPENAI_MODEL": os.getenv("AZURE_OPENAI_MODEL"),
             "ORCHESTRATOR_MODEL_TRIVIAL": os.getenv("ORCHESTRATOR_MODEL_TRIVIAL"),
             "ORCHESTRATOR_MODEL_STANDARD": os.getenv("ORCHESTRATOR_MODEL_STANDARD"),
             "ORCHESTRATOR_MODEL_TOOLS": os.getenv("ORCHESTRATOR_MODEL_TOOLS"),
             "ORCHESTRATOR_MODEL_REASONING": os.getenv("ORCHESTRATOR_MODEL_REASONING"),
             "REASONING_MODELS": os.getenv("REASONING_MODELS"),
-            "MODEL_ROUTER_DEPLOYMENT": os.getenv("MODEL_ROUTER_DEPLOYMENT"),
-            "GPT_OSS_120B_DEPLOYMENT": os.getenv("GPT_OSS_120B_DEPLOYMENT"),
         }
 
         payload = {"deployments": names, "details": details, "env_defaults": env_defaults}
         return func.HttpResponse(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
     except Exception as e:
-        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+        return func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
 
 # Simple ask http POST function that returns the completion based on prompt
 @app.function_name("ask")
@@ -137,7 +141,7 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
         body = {}
     prompt = (body.get("prompt") or "") if isinstance(body, dict) else ""
     if not prompt:
-        return func.HttpResponse(json.dumps({"error": "Missing 'prompt' in request body"}), status_code=400, mimetype="application/json")
+        return func.HttpResponse(json.dumps({"error": "Missing 'prompt' in request body"}, ensure_ascii=False), status_code=400, mimetype="application/json")
 
     try:
         started = time.perf_counter()
@@ -146,12 +150,12 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
         qp = getattr(req, 'params', {}) or {}
         body_model = body.get("model") if isinstance(body, dict) else None
         qp_model = qp.get("model") if qp else None
-        base_default = resolve_special_model(os.getenv("CHAT_MODEL_DEPLOYMENT_NAME"), "gpt-4o")
-        model = resolve_special_model(body_model or qp_model, base_default) or base_default
+        base_default = (os.getenv("AZURE_OPENAI_MODEL"))
+        model = (body_model or qp_model, base_default) or base_default
         # If classic tools are available and caller did not force a model, prefer the tools-capable model
         try:
             if not body_model and not qp_model and len(get_builtin_tools_config()) > 0:
-                model = resolve_special_model(os.getenv("ORCHESTRATOR_MODEL_TOOLS"), model) or model
+                model = (os.getenv("ORCHESTRATOR_MODEL_TOOLS"), model) or model
         except Exception:
             pass
         # Conversation: only when user_id provided
@@ -280,7 +284,6 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
             else:
                 response = client.responses.create(**responses_args)
                 output_text = getattr(response, "output_text", None) or ""
-        run_id = str(uuid.uuid4())
         duration_ms = int((time.perf_counter() - started) * 1000)
         # Optional memory persist if user_id provided
         persisted: bool = False
@@ -319,23 +322,19 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
         return resp
     except Exception as e:
         logging.exception("ask failed")
-        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+        return func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
 
 
 def _orchestrator_models() -> dict:
     return {
-        "trivial": resolve_special_model(
-            os.getenv("ORCHESTRATOR_MODEL_TRIVIAL"), "gpt-5-chat"
-        ),
-        "standard": resolve_special_model(
-            os.getenv("ORCHESTRATOR_MODEL_STANDARD"), "gpt-5-chat"
-        ),
-        "tools": resolve_special_model(
-            os.getenv("ORCHESTRATOR_MODEL_TOOLS"), "gpt-4.1"
-        ),
-        "deep": resolve_special_model(
-            os.getenv("ORCHESTRATOR_MODEL_REASONING"), "gpt-5-mini"
-        ),
+        "trivial": (
+            os.getenv("ORCHESTRATOR_MODEL_TRIVIAL")),
+        "standard": (
+            os.getenv("ORCHESTRATOR_MODEL_STANDARD")),
+        "tools": (
+            os.getenv("ORCHESTRATOR_MODEL_TOOLS")),
+        "deep": (
+            os.getenv("ORCHESTRATOR_MODEL_REASONING")),
     }
 
 
@@ -385,7 +384,7 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
         qp = getattr(req, 'params', {}) or {}
         prompt = (body.get("prompt") or qp.get("prompt") or "") if isinstance(body, dict) else (qp.get("prompt") or "")
         if not prompt:
-            return func.HttpResponse(json.dumps({"error": "Missing 'prompt'"}), status_code=400, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": "Missing 'prompt'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
 
         execute = str((body.get("execute") if isinstance(body, dict) else qp.get("execute")) or "true").lower() in ("1", "true", "yes", "on")
         constraints = body.get("constraints") if isinstance(body, dict) and isinstance(body.get("constraints"), dict) else {}
@@ -430,11 +429,9 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
         mode = _route_mode(prompt, has_tools=(mcp_tool_cfg is not None), constraints=constraints, allowed_tools=normalized_tools)
         models = _orchestrator_models()
         selected_model = models["deep" if mode == "deep" else ("tools" if mode == "tools" else mode)]
-        reasoning_effort = (body.get("reasoning_effort") if isinstance(body, dict) else (qp.get("reasoning_effort") if qp else None)) or os.getenv("DEFAULT_REASONING_EFFORT", "low")
-        decision_id = str(uuid.uuid4())
+        reasoning_effort = (body.get("reasoning_effort") if isinstance(body, dict) else (qp.get("reasoning_effort") if qp else None)) or "low"
 
         decision_payload = {
-            # decision_id intentionally omitted from response to simplify API
             "mode": mode,
             "selected_model": selected_model,
             "use_reasoning": (mode == "deep"),
@@ -448,8 +445,6 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
         # Execute using AOAI directly or with tools via Responses API
         client = _get_aoai_client()
         started = time.perf_counter()
-        # Prepare identifiers
-        run_id = str(uuid.uuid4())
         # Normalize conversation_id
         orig_missing_conversation_id = False
         conversation_id_raw = (body.get("conversation_id") if isinstance(body, dict) else None) or qp.get("conversation_id")
@@ -645,7 +640,6 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
                 response = client.responses.create(**responses_args)
                 output_text = getattr(response, "output_text", None) or ""
         duration_ms = int((time.perf_counter() - started) * 1000)
-        # run_id already created above
 
         # Memory: persist turn in a single conversation document (id == conversation_id)
         try:
@@ -676,66 +670,4 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
         return resp
     except Exception as e:
         logging.exception("orchestrate failed")
-        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
-
-## Whois endpoint removed as requested
-
-
-CHAT_STORAGE_CONNECTION = "AzureWebJobsStorage"
-COLLECTION_NAME = "ChatState"
-
-
-if str(os.getenv("ENABLE_ASSISTANT_BINDINGS", "false")).lower() in ("1", "true", "yes", "on"):
-    # http PUT function to start ChatBot conversation based on a chatID
-    @app.function_name("CreateChatBot")
-    @app.route(route="chats/{chatId}", methods=["PUT"])
-    @app.assistant_create_output(arg_name="requests")
-    def create_chat_bot(req: func.HttpRequest,
-                        requests: func.Out[str]) -> func.HttpResponse:
-        chatId = req.route_params.get("chatId")
-        input_json = req.get_json()
-        logging.info(
-            f"Creating chat ${chatId} from input parameters " +
-            "${json.dumps(input_json)}")
-        create_request = {
-            "id": chatId,
-            "instructions": input_json.get("instructions"),
-            "chatStorageConnectionSetting": CHAT_STORAGE_CONNECTION,
-            "collectionName": COLLECTION_NAME
-        }
-        requests.set(json.dumps(create_request))
-        response_json = {"chatId": chatId}
-        return func.HttpResponse(json.dumps(response_json), status_code=202,
-                                 mimetype="application/json")
-
-
-    # http GET function to get ChatBot conversation with chatID & timestamp
-    @app.function_name("GetChatState")
-    @app.route(route="chats/{chatId}", methods=["GET"])
-    @app.assistant_query_input(
-        arg_name="state",
-        id="{chatId}",
-        timestamp_utc="{Query.timestampUTC}",
-        chat_storage_connection_setting=CHAT_STORAGE_CONNECTION,
-        collection_name=COLLECTION_NAME
-    )
-    def get_chat_state(req: func.HttpRequest, state: str) -> func.HttpResponse:
-        return func.HttpResponse(state, status_code=200,
-                                 mimetype="application/json")
-
-
-    # http POST function for user to send a message to ChatBot with chatID
-    @app.function_name("PostUserResponse")
-    @app.route(route="chats/{chatId}", methods=["POST"])
-    @app.assistant_post_input(
-        arg_name="state", id="{chatId}",
-        user_message="{message}",
-        model="%CHAT_MODEL_DEPLOYMENT_NAME%",
-        chat_storage_connection_setting=CHAT_STORAGE_CONNECTION,
-        collection_name=COLLECTION_NAME
-        )
-    def post_user_response(req: func.HttpRequest, state: str) -> func.HttpResponse:
-        data = json.loads(state)
-        recent_message_content = data['recentMessages'][0]['content']
-        return func.HttpResponse(recent_message_content, status_code=200,
-                                 mimetype="text/plain")
+        return func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")

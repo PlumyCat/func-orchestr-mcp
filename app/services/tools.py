@@ -31,7 +31,7 @@ def normalize_allowed_tools(raw_value: Any) -> Optional[List[str]]:
 def resolve_mcp_config(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Prefer locked server-to-server config
     # Allow override via request only when explicitly enabled
-    allow_override = str(os.getenv("ALLOW_CLIENT_MCP_OVERRIDE", "false")).lower() in ("1", "true", "yes", "on")
+    allow_override = "false"
 
     if allow_override and body.get("mcp_url"):
         server_url = body.get("mcp_url")
@@ -43,8 +43,8 @@ def resolve_mcp_config(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if key:
                 headers = {"x-functions-key": key}
     else:
-        server_url = os.getenv("TOOLS_SSE_URL") or os.getenv("LOCAL_MCP_SSE_URL") or os.getenv("MCP_SSE_URL")
-        key = os.getenv("TOOLS_FUNCTIONS_KEY") or os.getenv("LOCAL_MCP_FUNCTIONS_KEY") or os.getenv("MCP_SSE_KEY")
+        server_url = os.getenv("TOOLS_SSE_URL") 
+        key = os.getenv("TOOLS_FUNCTIONS_KEY") 
         headers = {"x-functions-key": key} if key else None
 
     if not server_url:
@@ -53,7 +53,7 @@ def resolve_mcp_config(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not normalized_allowed:
             return None
         # Otherwise, still error because tools were requested but no server URL is configured
-        raise ValueError("Missing MCP SSE URL. Configure TOOLS_SSE_URL or LOCAL_MCP_SSE_URL/MCP_SSE_URL.")
+        raise ValueError("Missing MCP SSE URL. Configure TOOLS_SSE_URL.")
 
     # Determine allow-list behavior based on caller intent
     raw_allowed = body.get("allowed_tools")
@@ -71,7 +71,7 @@ def resolve_mcp_config(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             allowed_tools = normalized_allowed
         else:
             # If caller did not specify anything, keep a conservative default list
-            allowed_tools = ["hello_mcp", "get_snippet", "save_snippet"]
+            allowed_tools = ["hello_mcp"]
 
     def _normalize_require_approval(val: Any) -> str:
         try:
@@ -109,12 +109,6 @@ def _websearch_env() -> Tuple[Optional[str], Optional[str]]:
     return (url, key)
 
 
-def _websearch_enabled() -> bool:
-    flag = str(os.getenv("ENABLE_WEBSEARCH_TOOL", "true")).lower() in ("1", "true", "yes", "on")
-    url, _ = _websearch_env()
-    return flag and bool(url)
-
-
 def _build_search_web_tool_def() -> Dict[str, Any]:
     return {
         "type": "function",
@@ -149,11 +143,8 @@ def _build_search_web_tool_def() -> Dict[str, Any]:
 
 def get_builtin_tools_config() -> List[Dict[str, Any]]:
     tools: List[Dict[str, Any]] = []
-    if _websearch_enabled():
-        tools.append(_build_search_web_tool_def())
-    # Document service classic tools
-    if _docsvc_enabled():
-        tools.extend(_build_docsvc_tool_defs())
+    tools.append(_build_search_web_tool_def())
+    tools.extend(_build_docsvc_tool_defs())
     return tools
 
 
@@ -162,19 +153,27 @@ def has_builtin_tools() -> bool:
 
 
 def _call_websearch_backend(args: Dict[str, Any]) -> str:
+    import logging
     url, key = _websearch_env()
+    logging.info(f"[websearch] Backend URL: {_redact_secrets(url or 'None')}")
+    
     if not url:
+        logging.error("[websearch] Backend not configured")
         return "Websearch backend not configured."
     # Build URL with key only if not already embedded
     final_url = url
     if key and ("?code=" not in url) and ("&code=" not in url):
         sep = "&" if ("?" in url) else "?"
         final_url = f"{url}{sep}code={key}"
+    
+    logging.info(f"[websearch] Final URL: {_redact_secrets(final_url)}")
     payload: Dict[str, Any] = {}
     if isinstance(args, dict):
         query = str(args.get("query") or "").strip()
         if query:
+            # Try both 'query' and 'q' formats for compatibility
             payload["query"] = query
+            payload["q"] = query
         focus = str(args.get("focus_mode") or "").strip()
         question = str(args.get("question") or "").strip() or query
         if question:
@@ -203,53 +202,122 @@ def _call_websearch_backend(args: Dict[str, Any]) -> str:
             else:
                 focus = "webSearch"
         payload["focus_mode"] = focus
+    
+    logging.info(f"[websearch] Request payload: {payload}")
+    
     # Lazy import to avoid module-level failure
     try:
         import requests  # type: ignore
     except Exception as e:
+        logging.error(f"[websearch] Requests import failed: {e}")
         return f"requests import failed: {e}"
     try:
-        headers = {"Content-Type": "application/json"}
-        resp = requests.post(final_url, headers=headers, data=json.dumps(payload), timeout=30)
+        # SearxNG expects form data, not JSON
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        # Convert payload to form data format, focusing on the essential 'q' parameter
+        form_data = {}
+        if payload.get("query"):
+            form_data["q"] = payload["query"]
+        if payload.get("focus_mode"):
+            form_data["format"] = "json"  # Ensure JSON response
+        
+        logging.info(f"[websearch] Sending POST request to {_redact_secrets(final_url)}")
+        logging.info(f"[websearch] Form data: {form_data}")
+        resp = requests.post(final_url, headers=headers, data=form_data, timeout=30)
+        logging.info(f"[websearch] Response status: {resp.status_code}")
         text = resp.text or ""
+        logging.info(f"[websearch] Response text length: {len(text)}")
+        if len(text) < 300:
+            logging.info(f"[websearch] Response text: {text}")
+        else:
+            logging.info(f"[websearch] Response text (truncated): {text[:250]}...")
+            
         try:
             data = resp.json()
-        except Exception:
+            logging.info(f"[websearch] Response JSON parsed successfully. Keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+        except Exception as e:
+            logging.warning(f"[websearch] Failed to parse JSON response: {e}")
             data = None
+            
         if resp.status_code >= 400:
             safe_text = _redact_secrets(text)
+            logging.error(f"[websearch] HTTP error {resp.status_code}: {safe_text[:200]}")
             return f"websearch error {resp.status_code}: {safe_text[:500]}"
         # Prefer structured fields when available
         if isinstance(data, dict):
+            logging.info(f"[websearch] Processing structured response with keys: {list(data.keys())}")
             for key in ("output_text", "summary", "result", "content"):
                 val = data.get(key)
                 if isinstance(val, str) and val.strip():
+                    logging.info(f"[websearch] Found result in field '{key}': {val[:100]}...")
                     return val
-            # Fallback: pretty-print compact json
+            # Fallback: pretty-print compact json but check if actually empty
+            if not any(data.values()) or data.get('error'):
+                error_msg = f"No search results found. Service returned: {json.dumps(data, ensure_ascii=False)[:200]}"
+                logging.warning(f"[websearch] Empty or error response: {error_msg}")
+                return error_msg
             try:
-                return json.dumps(data, ensure_ascii=False)
+                fallback_result = json.dumps(data, ensure_ascii=False)
+                logging.info(f"[websearch] Returning JSON fallback: {fallback_result[:100]}...")
+                return fallback_result
             except Exception:
+                logging.warning("[websearch] Failed to serialize response JSON, returning raw text")
                 return text
+        if not text.strip():
+            logging.warning("[websearch] No text content in response")
+            return "No search results returned by the websearch service."
+        logging.info(f"[websearch] Returning raw text response: {text[:100]}...")
         return text
+    except requests.exceptions.ConnectTimeout:
+        error_msg = f"Websearch service timeout. Check if service is running at {_redact_secrets(final_url)}"
+        logging.error(f"[websearch] {error_msg}")
+        return error_msg
+    except requests.exceptions.ConnectionError:
+        error_msg = f"Cannot connect to websearch service. Check if service is running at {_redact_secrets(final_url)}"
+        logging.error(f"[websearch] {error_msg}")
+        return error_msg
     except Exception as e:
-        return f"websearch call failed: {_redact_secrets(str(e))}"
+        error_msg = f"websearch call failed: {_redact_secrets(str(e))}"
+        logging.error(f"[websearch] {error_msg}")
+        return error_msg
 
 
-def execute_tool_call(name: str, arguments: Dict[str, Any]) -> str:
+def execute_tool_call(name: str, arguments: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> str:
+    import logging
     tool = (name or "").strip().lower()
+    logging.info(f"[tools] Executing tool: {name} with arguments: {arguments}")
+    
     if tool in ("search_web", "websearch"):
-        return _call_websearch_backend(arguments or {})
+        result = _call_websearch_backend(arguments or {})
+        logging.info(f"[tools] Tool {name} result length: {len(result)} chars")
+        if len(result) < 200:
+            logging.info(f"[tools] Tool {name} result: {result}")
+        else:
+            logging.info(f"[tools] Tool {name} result (truncated): {result[:150]}...")
+        return result
     # Document service tools
     if tool == "convert_word_to_pdf":
-        return _docsvc_convert_word_to_pdf(arguments or {})
+        result = _docsvc_convert_word_to_pdf(arguments or {})
+        logging.info(f"[tools] Tool {name} result: {result[:100]}...")
+        return result
     if tool == "init_user":
-        return _docsvc_init_user(arguments or {})
+        result = _docsvc_init_user(arguments or {}, context)
+        logging.info(f"[tools] Tool {name} result: {result[:100]}...")
+        return result
     if tool == "list_images":
-        return _docsvc_list_images(arguments or {})
+        result = _docsvc_list_images(arguments or {}, context)
+        logging.info(f"[tools] Tool {name} result: {result[:100]}...")
+        return result
     if tool == "list_shared_templates":
-        return _docsvc_list_shared_templates(arguments or {})
+        result = _docsvc_list_shared_templates(arguments or {})
+        logging.info(f"[tools] Tool {name} result: {result[:100]}...")
+        return result
     if tool == "list_templates_http":
-        return _docsvc_list_templates_http(arguments or {})
+        result = _docsvc_list_templates_http(arguments or {}, context)
+        logging.info(f"[tools] Tool {name} result: {result[:100]}...")
+        return result
+    
+    logging.error(f"[tools] Unknown tool requested: {name}")
     return f"Unknown tool: {name}"
 
 
@@ -270,15 +338,9 @@ def _redact_secrets(text: str) -> str:
     return val
 
 def _docsvc_env() -> Tuple[Optional[str], Optional[str]]:
-    base = os.getenv("DOCSVC_BASE_URL") or os.getenv("DOCSVC_URL")
+    base = os.getenv("DOCSVC_BASE_URL") 
     key = os.getenv("DOCSVC_FUNCTION_KEY")
     return (base, key)
-
-
-def _docsvc_enabled() -> bool:
-    flag = str(os.getenv("ENABLE_DOCSVC_TOOLS", "true")).lower() in ("1", "true", "yes", "on")
-    base, _ = _docsvc_env()
-    return flag and bool(base)
 
 
 def _docsvc_build_url(path_template: str, path_params: Optional[Dict[str, str]] = None) -> str:
@@ -367,9 +429,9 @@ def _build_docsvc_tool_defs() -> List[Dict[str, Any]]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "user_id": {"type": "string", "description": "User identifier."}
+                    "user_id": {"type": "string", "description": "User identifier (optional, will use current user if not provided)."}
                 },
-                "required": ["user_id"]
+                "required": []
             },
         },
         {
@@ -380,9 +442,9 @@ def _build_docsvc_tool_defs() -> List[Dict[str, Any]]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "user_id": {"type": "string", "description": "User identifier."}
+                    "user_id": {"type": "string", "description": "User identifier (optional, will use current user if not provided)."}
                 },
-                "required": ["user_id"]
+                "required": []
             },
         },
         {
@@ -403,9 +465,9 @@ def _build_docsvc_tool_defs() -> List[Dict[str, Any]]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "user_id": {"type": "string", "description": "User identifier."}
+                    "user_id": {"type": "string", "description": "User identifier (optional, will use current user if not provided)."}
                 },
-                "required": ["user_id"]
+                "required": []
             },
         },
     ]
@@ -422,8 +484,11 @@ def _docsvc_convert_word_to_pdf(args: Dict[str, Any]) -> str:
     return _docsvc_request("POST", path)
 
 
-def _docsvc_init_user(args: Dict[str, Any]) -> str:
+def _docsvc_init_user(args: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> str:
     user_id = str(args.get("user_id") or "").strip()
+    # If user_id not provided in args, try to get from context
+    if not user_id and context:
+        user_id = str(context.get("user_id") or "").strip()
     if not user_id:
         return "Missing required parameter: user_id"
     resp_text = _docsvc_request("POST", "/users/{userId}/init", path_params={"userId": user_id})
@@ -442,8 +507,11 @@ def _docsvc_init_user(args: Dict[str, Any]) -> str:
     return resp_text
 
 
-def _docsvc_list_images(args: Dict[str, Any]) -> str:
+def _docsvc_list_images(args: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> str:
     user_id = str(args.get("user_id") or "").strip()
+    # If user_id not provided in args, try to get from context
+    if not user_id and context:
+        user_id = str(context.get("user_id") or "").strip()
     if not user_id:
         return "Missing required parameter: user_id"
     return _docsvc_request("GET", "/users/{userId}/images", path_params={"userId": user_id})
@@ -453,8 +521,11 @@ def _docsvc_list_shared_templates(args: Dict[str, Any]) -> str:
     return _docsvc_request("GET", "/templates")
 
 
-def _docsvc_list_templates_http(args: Dict[str, Any]) -> str:
+def _docsvc_list_templates_http(args: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> str:
     user_id = str(args.get("user_id") or "").strip()
+    # If user_id not provided in args, try to get from context
+    if not user_id and context:
+        user_id = str(context.get("user_id") or "").strip()
     if not user_id:
         return "Missing required parameter: user_id"
     return _docsvc_request("GET", "/users/{userId}/templates", path_params={"userId": user_id})

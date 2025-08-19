@@ -8,14 +8,14 @@
 @job_id = 
 
 
-### Models (available deployments)
-# @name models
-GET {{host}}/api/models
-Accept: application/json
-
 ### Ping (health)
 # @name ping
 GET {{host}}/api/ping
+Accept: application/json
+
+### Models (available deployments)
+# @name models
+GET {{host}}/api/models
 Accept: application/json
 
 ### Ask 1 create conversation without memories
@@ -427,12 +427,6 @@ GET {{host}}/api/mcp-result?job_id={{job_id}}&return_partial_output=true
 Accept: application/json
 
 
-### MCP Process Direct without 202 status
-# @name mcp_process_direct
-POST {{host}}/api/mcp-process-direct
-Content-Type: application/json
-
-{ "job_id": "{{job_id}}" }
 
 
 
@@ -447,4 +441,126 @@ Accept: application/json
 ### MCP Memory (get by id)
 # @name mcp_memory
 GET {{host}}/api/mcp-memory?user_id={{user_id}}&memory_id={{memory_id}}
+Accept: application/json
+
+
+### ------- COPILOT STUDIO ASYNC FLOW -------
+
+### Copilot Start Job (simple)
+# @name copilot_start_simple
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "Explain Azure Functions in 3 bullet points",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "",
+  "reasoning_effort": "low"
+}
+
+### Copilot Start Job (with tools)
+# @name copilot_start_tools
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "What's the weather like in Paris today?",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "websearch",
+  "reasoning_effort": "medium"
+}
+
+### Copilot Start Job (classic tools - documents)
+# @name copilot_start_classic
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "List my templates in storage",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "list_templates_http",
+  "reasoning_effort": "low"
+}
+
+### Copilot Start Job (reasoning task)
+# @name copilot_start_reasoning
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "Analysez en détail les avantages et inconvénients des microservices par rapport à une architecture monolithique. Fournissez une stratégie de migration étape par étape.",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "",
+  "reasoning_effort": "high"
+}
+
+### Copilot Start Job (web search)
+# @name copilot_start_websearch
+POST {{host}}/api/orchestrate/start
+Content-Type: application/json
+
+{
+  "prompt": "What are the latest updates in Azure Functions pricing for 2024?",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "allowed_tools": "search_web",
+  "reasoning_effort": "low"
+}
+
+###
+@copilot_job_id = 
+
+### Copilot Status (polling)
+# @name copilot_status
+GET {{host}}/api/orchestrate/status?job_id={{copilot_job_id}}
+Accept: application/json
+
+### Copilot Status (polling with job ID from previous request)
+# @name copilot_status_auto
+GET {{host}}/api/orchestrate/status?job_id={{copilot_start_simple.response.body.job_id}}
+Accept: application/json
+
+### ------- ASK STREAMING (Manual model selection) -------
+
+### Ask Start Job (specific model)
+# @name ask_start_specific
+POST {{host}}/api/ask/start
+Content-Type: application/json
+
+{
+  "prompt": "Write a Python function to calculate fibonacci numbers",
+  "model": "gpt-4.1-mini",
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "reasoning_effort": "low"
+}
+
+### Ask Start Job (reasoning model)
+# @name ask_start_reasoning
+POST {{host}}/api/ask/start
+Content-Type: application/json
+
+{
+  "prompt": "Compare the performance characteristics of different sorting algorithms in detail",
+  "model": "gpt-5-mini", 
+  "user_id": "{{user_id}}",
+  "conversation_id": "init",
+  "reasoning_effort": "high"
+}
+
+###
+@ask_job_id = 
+
+### Ask Status (polling)
+# @name ask_status
+GET {{host}}/api/ask/status?job_id={{ask_job_id}}
+Accept: application/json
+
+### Ask Status (polling with job ID from previous request)
+# @name ask_status_auto
+GET {{host}}/api/ask/status?job_id={{ask_start_specific.response.body.job_id}}
 Accept: application/json

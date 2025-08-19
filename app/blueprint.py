@@ -18,10 +18,10 @@ from .services.storage import (
     get_sidecar_request,
 )
 from .services.tools import resolve_mcp_config, normalize_allowed_tools
+
 from .services.tools import execute_tool_call
 from .services.conversation import (
     create_llm_client,
-    select_model_and_effort,
     build_responses_args,
     run_with_optional_stream,
     run_responses_with_tools,
@@ -44,7 +44,8 @@ bp = func.Blueprint()
 _SNIPPET_NAME_PROPERTY_NAME = "snippetname"
 _SNIPPET_PROPERTY_NAME = "snippet"
 _BLOB_PATH = "snippets/{mcptoolargs." + _SNIPPET_NAME_PROPERTY_NAME + "}.json"
-QUEUE_NAME = os.getenv("MCP_JOBS_QUEUE", "mcpjobs")
+QUEUE_NAME = "mcpjobs"
+COPILOT_QUEUE_NAME = "mcpjobs-copilot"
 
 
 def _get_result_delay_seconds() -> float:
@@ -86,6 +87,49 @@ def _preflight_response(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(status_code=204, headers=headers)
 
 
+def _orchestrator_models() -> dict:
+    return {
+        "trivial": os.getenv("ORCHESTRATOR_MODEL_TRIVIAL"),
+        "standard": os.getenv("ORCHESTRATOR_MODEL_STANDARD"),
+        "tools": os.getenv("ORCHESTRATOR_MODEL_TOOLS"),
+        "deep": os.getenv("ORCHESTRATOR_MODEL_REASONING"),
+    }
+
+
+def _route_mode(prompt: str, has_tools: bool, constraints: dict, allowed_tools: Optional[List[str]] = None) -> str:
+    # Only select tools mode if caller explicitly allows tools
+    if has_tools and allowed_tools:
+        return "tools"
+    # Accept both camelCase and snake_case flags and flat boolean values
+    prefer_reasoning = False
+    try:
+        prefer_reasoning = str(constraints.get("preferReasoning", "")).lower() in ("1", "true", "yes", "on") or \
+                           str(constraints.get("prefer_reasoning", "")).lower() in ("1", "true", "yes", "on")
+    except Exception:
+        prefer_reasoning = False
+    try:
+        max_latency_ms = int(constraints.get("maxLatencyMs")) if constraints.get("maxLatencyMs") is not None else None
+    except Exception:
+        max_latency_ms = None
+    text = (prompt or "").lower()
+    # Include French markers so FR prompts can trigger reasoning automatically
+    deep_markers = (
+        "plan", "multi-step", "derive", "prove", "why", "strategy", "chain of thought",
+        "plan d'action", "multi-etapes", "multi étapes", "démontrer", "demontrer", "prouve", "pourquoi",
+        "stratégie", "strategie", "raisonnement", "chaine de raisonnement", "chaîne de raisonnement",
+        "réfléchis", "reflechis", "pas à pas", "pas a pas", "analyse détaillée", "explication détaillée"
+    )
+    if prefer_reasoning or any(m in text for m in deep_markers) or len(prompt) > 800:
+        # If explicit latency budget is tight, downshift to standard
+        if max_latency_ms is not None and max_latency_ms < 1500:
+            return "standard"
+        return "deep"
+    # length-based quick rule
+    if len(prompt) < 160:
+        return "trivial"
+    return "standard"
+
+
 def _apply_cors(resp: func.HttpResponse, req: func.HttpRequest) -> func.HttpResponse:
     origin = req.headers.get("Origin") or req.headers.get("origin")
     allowed = _parse_allowed_origins()
@@ -109,7 +153,7 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
         prompt = (body.get("prompt") or qp.get("prompt") or "") if isinstance(body, dict) else (qp.get("prompt") or "")
         if not prompt:
             return func.HttpResponse(
-                json.dumps({"error": "Missing 'prompt' in request body"}),
+                json.dumps({"error": "Missing 'prompt' in request body"}, ensure_ascii=False),
                 status_code=400,
                 mimetype="application/json",
             )
@@ -128,12 +172,12 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
         if qp.get("debug") is not None:
             merged["debug"] = str(qp.get("debug")).lower() in ("1", "true", "yes", "on")
 
-        model = merged.get("model") or os.getenv("AZURE_OPENAI_MODEL") or "gpt-5-mini"
+        model = merged.get("model") or os.getenv("AZURE_OPENAI_MODEL")
         mcp_tool_cfg = resolve_mcp_config(merged)
 
         client = create_llm_client()
 
-        reasoning_effort = (merged.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT") or "low").lower()
+        reasoning_effort = (merged.get("reasoning_effort") or "low").lower()
         # Conversation logic only if user_id provided
         user_id = (merged.get("user_id") or qp.get("user_id") or "").strip()
         conversation_id_raw = (merged.get("conversation_id") or qp.get("conversation_id"))
@@ -218,7 +262,7 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
             # Use a tools-capable model if not explicitly set
             try:
                 if not responses_args.get("model"):
-                    responses_args["model"] = os.getenv("ORCHESTRATOR_MODEL_TOOLS", "gpt-4.1")
+                    responses_args["model"] = os.getenv("ORCHESTRATOR_MODEL_TOOLS")
             except Exception:
                 pass
         # If caller provided allowed_tools list with a single classic function name, avoid invalid tool_choice schema
@@ -366,7 +410,7 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
         )
 
 
-def _get_storage_clients() -> Dict[str, Any]:
+def _get_storage_clients(queue_name: str = QUEUE_NAME) -> Dict[str, Any]:
     conn_str = os.getenv("AzureWebJobsStorage")
     if conn_str and conn_str.strip().lower().startswith("usedevelopmentstorage=true"):
         conn_str = (
@@ -379,7 +423,7 @@ def _get_storage_clients() -> Dict[str, Any]:
     if not conn_str:
         raise RuntimeError("Missing AzureWebJobsStorage connection string.")
     return {
-        "queue": QueueClient.from_connection_string(conn_str, queue_name=QUEUE_NAME),
+        "queue": QueueClient.from_connection_string(conn_str, queue_name=queue_name),
         "blob": BlobServiceClient.from_connection_string(conn_str),
         "container": os.getenv("MCP_JOBS_CONTAINER", "jobs"),
     }
@@ -397,7 +441,7 @@ def mcp_enqueue(req: func.HttpRequest) -> func.HttpResponse:
 
         prompt = (body.get("prompt") or "") if isinstance(body, dict) else ""
         if not prompt:
-            return func.HttpResponse(json.dumps({"error": "Missing 'prompt'"}), status_code=400, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": "Missing 'prompt'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
 
         job_id = str(uuid.uuid4())
 
@@ -441,11 +485,11 @@ def mcp_enqueue(req: func.HttpRequest) -> func.HttpResponse:
         except TypeError:
             storage["queue"].send_message(message)
 
-        resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "queued"}), mimetype="application/json")
+        resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "queued"}, ensure_ascii=False), mimetype="application/json")
         return _apply_cors(resp, req)
     except Exception as e:
         logging.exception("Error in /api/mcp-enqueue")
-        resp = func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+        resp = func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
         return _apply_cors(resp, req)
 
 
@@ -456,13 +500,13 @@ def mcp_result(req: func.HttpRequest) -> func.HttpResponse:
             return _preflight_response(req)
         job_id = req.params.get("job_id")
         if not job_id:
-            resp = func.HttpResponse(json.dumps({"error": "Missing 'job_id'"}), status_code=400, mimetype="application/json")
+            resp = func.HttpResponse(json.dumps({"error": "Missing 'job_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
             return _apply_cors(resp, req)
 
         storage = _get_storage_clients()
         blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
         if not blob_client.exists():
-            resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "unknown"}), mimetype="application/json", status_code=404)
+            resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "unknown"}, ensure_ascii=False), mimetype="application/json", status_code=404)
             return _apply_cors(resp, req)
 
         content = json.loads(blob_client.download_blob().readall().decode("utf-8"))
@@ -477,23 +521,30 @@ def mcp_result(req: func.HttpRequest) -> func.HttpResponse:
         return_partial = str(qp.get("return_partial_output", "")).lower() in ("1", "true", "yes", "on")
         if status == "running":
             if return_partial:
-                if content.get("partial_output") and not content.get("output_text"):
-                    content["output_text"] = content["partial_output"]
+                # Support both old and new field names for compatibility
+                partial_content = content.get("partial_text") or content.get("partial_output") 
+                if partial_content and not content.get("output_text"):
+                    content["output_text"] = partial_content
             else:
-                if "partial_output" in content:
-                    content.pop("partial_output", None)
+                # Remove partial output fields
+                content.pop("partial_output", None)
+                content.pop("partial_text", None)
 
         if status == "running" and not content.get("output_text"):
             content.setdefault("output_text", "⏳ Thought process ...")
+            
+        # Map final_text to output_text for completed jobs if output_text is missing
+        if status in ("completed", "done") and content.get("final_text") and not content.get("output_text"):
+            content["output_text"] = content["final_text"]
 
         response_payload = {"job_id": job_id, **content}
-        resp = func.HttpResponse(json.dumps(response_payload), mimetype="application/json")
+        resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json")
         if "recommended_poll_interval_ms" in content:
             resp.headers["Retry-After"] = str(max(1, int(content["recommended_poll_interval_ms"] / 1000)))
         return _apply_cors(resp, req)
     except Exception as e:
         logging.exception("Error in /api/mcp-result")
-        resp = func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+        resp = func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
         return _apply_cors(resp, req)
 
 
@@ -516,7 +567,15 @@ def queue_trigger(msg: func.QueueMessage) -> None:
             created_at = existing.get("createdAt")
         except Exception:
             pass
-        running_payload = {"status": "running", "progress": 1}
+        running_payload = {
+            "status": "running", 
+            "progress": 1,
+            "message": "Réflexion en cours…",
+            "tool": "",
+            "partial_text": "",
+            "final_text": "",
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
         if created_at:
             running_payload["createdAt"] = created_at
         # Mark start time to compute duration later
@@ -528,8 +587,8 @@ def queue_trigger(msg: func.QueueMessage) -> None:
         logging.info(f"[mcp-queue] job {job_id} marked running")
 
         prompt = (body.get("prompt") or "") if isinstance(body, dict) else ""
-        model = body.get("model") or os.getenv("AZURE_OPENAI_MODEL") or "gpt-5-mini"
-        reasoning_effort = (body.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT") or "low").lower()
+        model = body.get("model") or os.getenv("AZURE_OPENAI_MODEL")
+        reasoning_effort = (body.get("reasoning_effort") or "low").lower()
         mcp_tool_cfg = resolve_mcp_config(body)
         client = create_llm_client()
         conversation_id_raw = str((body.get("conversation_id") or "").strip())
@@ -629,8 +688,11 @@ def queue_trigger(msg: func.QueueMessage) -> None:
                                 progress_value = min(95, progress_value + 2)
                                 running_update = {
                                     "status": "running",
-                                    "partial_output": "".join(partial_chunks),
                                     "progress": progress_value,
+                                    "message": "Génération en cours…",
+                                    "tool": "",
+                                    "partial_text": "".join(partial_chunks),
+                                    "final_text": "",
                                 }
                                 if created_at:
                                     running_update["createdAt"] = created_at
@@ -658,9 +720,12 @@ def queue_trigger(msg: func.QueueMessage) -> None:
                 logging.exception("non-stream create failed")
                 output_text = f"error: {e_inner}"
         result = {
-            "status": "done",
-            "output_text": output_text,
+            "status": "completed",
             "progress": 100,
+            "message": "Terminé",
+            "tool": "",
+            "partial_text": "",
+            "final_text": output_text or "",
             "model": model,
         }
         # Add duration_ms
@@ -675,6 +740,7 @@ def queue_trigger(msg: func.QueueMessage) -> None:
             pass
         if created_at:
             result["createdAt"] = created_at
+        result["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         blob_client.upload_blob(json.dumps(result, ensure_ascii=False), overwrite=True)
         logging.info(f"[mcp-queue] job {job_id} done")
         # Save full turn memory (optional) when user_id provided
@@ -713,18 +779,18 @@ def mcp_process(req: func.HttpRequest) -> func.HttpResponse:
             body = {}
         job_id = (body.get("job_id") or req.params.get("job_id") or "").strip()
         if not job_id:
-            resp = func.HttpResponse(json.dumps({"error": "Missing 'job_id'"}), status_code=400, mimetype="application/json")
+            resp = func.HttpResponse(json.dumps({"error": "Missing 'job_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
             return _apply_cors(resp, req)
 
         storage = _get_storage_clients()
         blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
         if not blob_client.exists():
-            resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "unknown"}), status_code=404, mimetype="application/json")
+            resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "unknown"}, ensure_ascii=False), status_code=404, mimetype="application/json")
             return _apply_cors(resp, req)
 
         req_blob = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.req.json")
         if not req_blob.exists():
-            return func.HttpResponse(json.dumps({"error": "Missing request payload for job"}), status_code=500, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": "Missing request payload for job"}, ensure_ascii=False), status_code=500, mimetype="application/json")
         job_body = json.loads(req_blob.download_blob().readall().decode("utf-8"))
 
         # Mark as running to signal start, then enqueue the job for the queue_trigger to process
@@ -734,7 +800,15 @@ def mcp_process(req: func.HttpRequest) -> func.HttpResponse:
             created_at = existing.get("createdAt")
         except Exception:
             pass
-        running_payload = {"status": "running", "progress": 1}
+        running_payload = {
+            "status": "running", 
+            "progress": 1,
+            "message": "Réflexion en cours…",
+            "tool": "",
+            "partial_text": "",
+            "final_text": "",
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
         if created_at:
             running_payload["createdAt"] = created_at
         blob_client.upload_blob(json.dumps(running_payload), overwrite=True)
@@ -752,110 +826,13 @@ def mcp_process(req: func.HttpRequest) -> func.HttpResponse:
             "status": "running",
             "recommended_poll_interval_ms": _get_recommended_poll_interval_ms(),
         }
-        resp = func.HttpResponse(json.dumps(response_payload), mimetype="application/json")
+        resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json")
         return _apply_cors(resp, req)
     except Exception as e:
         logging.exception("Error in /api/mcp-process")
-        resp = func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+        resp = func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
         return _apply_cors(resp, req)
 
-
-@bp.route(route="mcp-process-direct", methods=[func.HttpMethod.POST, func.HttpMethod.OPTIONS], auth_level=func.AuthLevel.FUNCTION)
-def mcp_process_direct(req: func.HttpRequest) -> func.HttpResponse:
-    try:
-        if req.method == "OPTIONS":
-            return _preflight_response(req)
-        try:
-            body: Dict[str, Any] = req.get_json()
-        except Exception:
-            body = {}
-        job_id = (body.get("job_id") or req.params.get("job_id") or "").strip()
-        if not job_id:
-            resp = func.HttpResponse(json.dumps({"error": "Missing 'job_id'"}), status_code=400, mimetype="application/json")
-            return _apply_cors(resp, req)
-
-        storage = _get_storage_clients()
-        blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
-        if not blob_client.exists():
-            resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "unknown"}), status_code=404, mimetype="application/json")
-            return _apply_cors(resp, req)
-
-        req_blob = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.req.json")
-        if not req_blob.exists():
-            return func.HttpResponse(json.dumps({"error": "Missing request payload for job"}), status_code=500, mimetype="application/json")
-        job_body = json.loads(req_blob.download_blob().readall().decode("utf-8"))
-
-        created_at: Optional[str] = None
-        try:
-            existing = json.loads(blob_client.download_blob().readall().decode("utf-8"))
-            created_at = existing.get("createdAt")
-        except Exception:
-            pass
-        running_payload = {"status": "running", "progress": 1}
-        if created_at:
-            running_payload["createdAt"] = created_at
-        blob_client.upload_blob(json.dumps(running_payload), overwrite=True)
-
-        prompt = (job_body.get("prompt") or "") if isinstance(job_body, dict) else ""
-        model = job_body.get("model") or os.getenv("AZURE_OPENAI_MODEL") or "gpt-5-mini"
-        reasoning_effort = (job_body.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT") or "low").lower()
-        mcp_tool_cfg = resolve_mcp_config(job_body)
-        client = create_llm_client()
-        conversation_id_raw = str((job_body.get("conversation_id") or "").strip())
-        conversation_id = conversation_id_raw or None
-        if conversation_id and conversation_id.lower() == "init":
-            conversation_id = None
-        responses_args: Dict[str, Any] = build_responses_args(model, prompt, mcp_tool_cfg, reasoning_effort)
-        # Prefer streaming in direct processing; drop classic tools
-        if responses_args.get("tools"):
-            responses_args["tools"] = [t for t in responses_args["tools"] if t.get("type") != "function"]
-
-        partial_chunks: List[str] = []
-        progress_value: int = 1
-        output_text: Optional[str] = None
-        try:
-            with client.responses.stream(**responses_args) as stream:
-                for event in stream:
-                    if getattr(event, "type", None) == "response.output_text.delta":
-                        delta = getattr(event, "delta", "")
-                        if delta:
-                            partial_chunks.append(delta)
-                            progress_value = min(95, progress_value + 2)
-                            running_update = {
-                                "status": "running",
-                                "partial_output": "".join(partial_chunks),
-                                "progress": progress_value,
-                            }
-                            if created_at:
-                                running_update["createdAt"] = created_at
-                            blob_client.upload_blob(json.dumps(running_update, ensure_ascii=False), overwrite=True)
-                final_response = stream.get_final_response()
-                output_text = getattr(final_response, "output_text", None) or "".join(partial_chunks)
-        except Exception:
-            logging.exception("mcp-process-direct streaming failed; fallback create")
-            try:
-                response = client.responses.create(**responses_args)
-                output_text = getattr(response, "output_text", None)
-            except Exception as e_inner:
-                output_text = f"error: {e_inner}"
-
-        result = {
-            "status": "done",
-            "output_text": output_text,
-            "progress": 100,
-            "model": model,
-        }
-        if created_at:
-            result["createdAt"] = created_at
-        blob_client.upload_blob(json.dumps(result, ensure_ascii=False), overwrite=True)
-
-        response_payload = {"job_id": job_id, **result}
-        resp = func.HttpResponse(json.dumps(response_payload), mimetype="application/json")
-        return _apply_cors(resp, req)
-    except Exception as e:
-        logging.exception("Error in /api/mcp-process-direct")
-        resp = func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
-        return _apply_cors(resp, req)
 
 @bp.route(route="mcp-memories", methods=[func.HttpMethod.GET], auth_level=func.AuthLevel.FUNCTION)
 def mcp_list_memories(req: func.HttpRequest) -> func.HttpResponse:
@@ -863,13 +840,13 @@ def mcp_list_memories(req: func.HttpRequest) -> func.HttpResponse:
         qp = getattr(req, 'params', {}) or {}
         user_id = (qp.get("user_id") or "").strip()
         if not user_id:
-            return func.HttpResponse(json.dumps({"error": "Missing 'user_id'"}), status_code=400, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": "Missing 'user_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
         limit = int(qp.get("limit") or 50)
         items = cosmos_list_memories(user_id, limit=limit)
         return func.HttpResponse(json.dumps({"user_id": user_id, "items": items}, ensure_ascii=False), mimetype="application/json")
     except Exception as e:
         logging.exception("Error in /api/mcp-memories")
-        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+        return func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
 
 
 @bp.route(route="mcp-memory", methods=[func.HttpMethod.GET], auth_level=func.AuthLevel.FUNCTION)
@@ -879,11 +856,485 @@ def mcp_get_memory(req: func.HttpRequest) -> func.HttpResponse:
         user_id = (qp.get("user_id") or "").strip()
         memory_id = (qp.get("memory_id") or "").strip()
         if not user_id or not memory_id:
-            return func.HttpResponse(json.dumps({"error": "Missing 'user_id' or 'memory_id'"}), status_code=400, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": "Missing 'user_id' or 'memory_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
         doc = cosmos_get_memory(user_id, memory_id)
         if not doc:
-            return func.HttpResponse(json.dumps({"error": "Not found"}), status_code=404, mimetype="application/json")
+            return func.HttpResponse(json.dumps({"error": "Not found"}, ensure_ascii=False), status_code=404, mimetype="application/json")
         return func.HttpResponse(json.dumps(doc, ensure_ascii=False), mimetype="application/json")
     except Exception as e:
         logging.exception("Error in /api/mcp-memory")
-        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+        return func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
+
+
+@bp.route(route="orchestrate/start", methods=[func.HttpMethod.POST, func.HttpMethod.OPTIONS], auth_level=func.AuthLevel.FUNCTION)
+def orchestrate_start(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        if req.method == "OPTIONS":
+            return _preflight_response(req)
+        
+        try:
+            body: Dict[str, Any] = req.get_json()
+        except Exception:
+            body = {}
+
+        qp = getattr(req, 'params', {}) or {}
+        prompt = (body.get("prompt") or qp.get("prompt") or "") if isinstance(body, dict) else (qp.get("prompt") or "")
+        if not prompt:
+            resp = func.HttpResponse(json.dumps({"ok": False, "error": "Missing 'prompt'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
+            return _apply_cors(resp, req)
+
+        # Orchestration logic: determine mode and model
+        constraints = body.get("constraints") if isinstance(body, dict) and isinstance(body.get("constraints"), dict) else {}
+        allowed_tools = body.get("allowed_tools") if isinstance(body, dict) else None
+        
+        # Merge top-level flags into constraints for backward compatibility
+        if isinstance(body, dict) and isinstance(constraints, dict):
+            top_level_flags = {
+                "prefer_reasoning": body.get("prefer_reasoning"),
+                "preferReasoning": body.get("preferReasoning"),
+                "maxLatencyMs": body.get("maxLatencyMs"),
+                "maxLatencyMs_from_snake": body.get("max_latency_ms"),
+            }
+            for key, value in top_level_flags.items():
+                if value is None:
+                    continue
+                if key == "maxLatencyMs_from_snake":
+                    constraints.setdefault("maxLatencyMs", value)
+                else:
+                    constraints.setdefault(key, value)
+
+        # Normalize allowed_tools to a list if present
+        normalized_tools = None
+        if isinstance(allowed_tools, list):
+            normalized_tools = allowed_tools
+        elif isinstance(allowed_tools, str) and allowed_tools.strip():
+            normalized_tools = [t.strip() for t in allowed_tools.split(',') if t.strip()]
+
+        # Determine MCP tools configuration
+        mcp_tool_cfg = None
+        try:
+            merged = dict(body) if isinstance(body, dict) else {}
+            if qp.get("mcp_url"):
+                merged["mcp_url"] = qp.get("mcp_url")
+            if allowed_tools is not None:
+                merged["allowed_tools"] = allowed_tools
+            mcp_tool_cfg = resolve_mcp_config(merged)
+        except Exception:
+            mcp_tool_cfg = None
+
+        # Route mode using orchestration logic
+        mode = _route_mode(prompt, has_tools=(mcp_tool_cfg is not None), constraints=constraints, allowed_tools=normalized_tools)
+        models = _orchestrator_models()
+        selected_model = models["deep" if mode == "deep" else ("tools" if mode == "tools" else mode)]
+        reasoning_effort = (body.get("reasoning_effort") if isinstance(body, dict) else (qp.get("reasoning_effort") if qp else None)) or "low"
+
+        # Enrich body with orchestration decision
+        orchestration_body = dict(body) if isinstance(body, dict) else {}
+        orchestration_body.update({
+            "selected_model": selected_model,
+            "mode": mode,
+            "use_reasoning": (mode == "deep"),
+            "reasoning_effort": reasoning_effort if mode == "deep" else "low",
+            "mcp_tool_cfg": mcp_tool_cfg,
+        })
+
+        job_id = str(uuid.uuid4())
+
+        storage = _get_storage_clients(COPILOT_QUEUE_NAME)
+        try:
+            storage["queue"].create_queue()
+        except Exception:
+            pass
+        try:
+            storage["blob"].create_container(storage["container"])
+        except Exception:
+            pass
+
+        req_blob = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.req.json")
+        req_blob.upload_blob(json.dumps(orchestration_body, ensure_ascii=False), overwrite=True)
+
+        blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
+        initial_message = "Analyse et sélection du modèle optimal…" if mode == "deep" else "Préparation de la réponse…"
+        initial_payload = {
+            "status": "queued",
+            "progress": 0,
+            "message": initial_message,
+            "tool": "",
+            "partial_text": "",
+            "final_text": "",
+            "mode": mode,
+            "selected_model": selected_model,
+            "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        blob_client.upload_blob(json.dumps(initial_payload, ensure_ascii=False), overwrite=True)
+
+        try:
+            user_id = str((orchestration_body.get("user_id") or "").strip())
+            conv_raw = str((orchestration_body.get("conversation_id") or "").strip())
+            if user_id and (not conv_raw or conv_raw.lower() == "init"):
+                # Use timestamp for conversation_id instead of incremental counter
+                timestamp_id = int(time.time())
+                orchestration_body["conversation_id"] = f"{user_id}_{timestamp_id}"
+                
+                # Update the request blob with the generated conversation_id
+                req_blob.upload_blob(json.dumps(orchestration_body, ensure_ascii=False), overwrite=True)
+        except Exception:
+            pass
+
+        message = json.dumps({"job_id": job_id, "body": orchestration_body, "type": "orchestrate"})
+        ttl_sec = int(os.getenv("MCP_JOBS_TTL_SECONDS", "3600"))
+        try:
+            storage["queue"].send_message(message, time_to_live=ttl_sec)
+        except TypeError:
+            storage["queue"].send_message(message)
+
+        response_payload = {
+            "ok": True,
+            "job_id": job_id,
+            "status": "queued",
+            "message": initial_message,
+            "progress": 0,
+            "tool": "",
+            "mode": mode,
+            "selected_model": selected_model,
+            "conversation_id": orchestration_body.get("conversation_id", ""),
+            "retry_after_sec": 3
+        }
+        resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json")
+        return _apply_cors(resp, req)
+    except Exception as e:
+        logging.exception("Error in /api/orchestrate/start")
+        resp = func.HttpResponse(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
+        return _apply_cors(resp, req)
+
+
+@bp.route(route="orchestrate/status", methods=[func.HttpMethod.GET, func.HttpMethod.OPTIONS], auth_level=func.AuthLevel.FUNCTION)
+def orchestrate_status(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        if req.method == "OPTIONS":
+            return _preflight_response(req)
+        
+        job_id = req.params.get("job_id")
+        if not job_id:
+            resp = func.HttpResponse(json.dumps({"ok": False, "error": "Missing 'job_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
+            return _apply_cors(resp, req)
+
+        storage = _get_storage_clients(COPILOT_QUEUE_NAME)
+        blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
+        if not blob_client.exists():
+            response_payload = {
+                "ok": False,
+                "job_id": job_id,
+                "status": "unknown",
+                "message": "Job not found",
+                "progress": 0,
+                "tool": "",
+                "final_text": ""
+            }
+            resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json", status_code=404)
+            return _apply_cors(resp, req)
+
+        content = json.loads(blob_client.download_blob().readall().decode("utf-8"))
+
+        status = str(content.get("status", "")).lower()
+        progress = int(content.get("progress", 0))
+        
+        # Debug logging for unexpected status
+        logging.info(f"[orchestrate/status] job_id={job_id}, status='{status}', content={json.dumps(content, ensure_ascii=False)}")
+        
+        # Map internal status to Copilot-compatible status
+        if status == "queued":
+            mapped_status = "queued"
+            message = content.get("message", "Réflexion en cours…")
+            retry_after = 3
+        elif status == "running":
+            mapped_status = "running" 
+            message = content.get("message", "Réflexion en cours…")
+            retry_after = 2
+        elif status in ("done", "completed"):
+            mapped_status = "completed"
+            message = "Completed"
+            retry_after = None
+        elif status == "error":
+            mapped_status = "failed"
+            message = f"Error: {content.get('error', 'Unknown error')}"
+            retry_after = None
+        else:
+            mapped_status = "unknown"
+            message = content.get("message", "Status unknown")
+            retry_after = 5
+
+        # Handle tool usage status with more specific messages
+        tool_name = content.get("tool", "")
+        if tool_name and mapped_status == "running":
+            mapped_status = "tool"
+            # Use existing message from worker if available, otherwise generate generic one
+            current_message = content.get("message", "")
+            if current_message and ("cours" in current_message or "Utilisation" in current_message):
+                message = current_message
+            else:
+                # Provide specific tool messages for orchestrate mode
+                if tool_name.lower() == "websearch":
+                    message = "Web search in progress..."
+                elif tool_name in ["list_templates_http", "list_images", "convert_word_to_pdf"]:
+                    message = f"Using tool: {tool_name}"
+                else:
+                    message = f"Using tool: {tool_name}"
+
+        # Add delay for status polling to limit API calls
+        if mapped_status in ("queued", "running", "tool"):
+            time.sleep(5)
+
+        # Try to get conversation_id from request blob
+        conversation_id = ""
+        try:
+            req_blob = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.req.json")
+            if req_blob.exists():
+                req_content = json.loads(req_blob.download_blob().readall().decode("utf-8"))
+                conversation_id = req_content.get("conversation_id", "")
+        except Exception:
+            pass
+
+        response_payload = {
+            "ok": True,
+            "job_id": job_id,
+            "status": mapped_status,
+            "message": message,
+            "progress": progress,
+            "tool": tool_name,
+            "mode": content.get("mode", "orchestrate"),
+            "selected_model": content.get("selected_model", ""),
+            "conversation_id": conversation_id,
+            "final_text": content.get("final_text", content.get("output_text", ""))
+        }
+
+        resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json")
+        if retry_after:
+            resp.headers["Retry-After"] = str(retry_after)
+        return _apply_cors(resp, req)
+    except Exception as e:
+        logging.exception("Error in /api/orchestrate/status")
+        resp = func.HttpResponse(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
+        return _apply_cors(resp, req)
+
+
+@bp.route(route="ask/start", methods=[func.HttpMethod.POST, func.HttpMethod.OPTIONS], auth_level=func.AuthLevel.FUNCTION)
+def ask_start(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        if req.method == "OPTIONS":
+            return _preflight_response(req)
+        
+        try:
+            body: Dict[str, Any] = req.get_json()
+        except Exception:
+            body = {}
+
+        qp = getattr(req, 'params', {}) or {}
+        prompt = (body.get("prompt") or qp.get("prompt") or "") if isinstance(body, dict) else (qp.get("prompt") or "")
+        if not prompt:
+            resp = func.HttpResponse(json.dumps({"ok": False, "error": "Missing 'prompt'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
+            return _apply_cors(resp, req)
+
+        # ASK logic: manual model selection
+        merged: Dict[str, Any] = dict(body) if isinstance(body, dict) else {}
+        if qp.get("model"):
+            merged["model"] = qp.get("model")
+        if qp.get("reasoning_effort"):
+            merged["reasoning_effort"] = qp.get("reasoning_effort")
+
+        # Model selection (same logic as api/ask)
+        body_model = merged.get("model")
+        base_default = os.getenv("AZURE_OPENAI_MODEL")
+        model = body_model or base_default
+        reasoning_effort = merged.get("reasoning_effort") or "low"
+
+        # Enrich body with ask decision
+        ask_body = dict(merged)
+        ask_body.update({
+            "selected_model": model,
+            "mode": "ask",
+            "reasoning_effort": reasoning_effort,
+        })
+
+        job_id = str(uuid.uuid4())
+
+        storage = _get_storage_clients(COPILOT_QUEUE_NAME)
+        try:
+            storage["queue"].create_queue()
+        except Exception:
+            pass
+        try:
+            storage["blob"].create_container(storage["container"])
+        except Exception:
+            pass
+
+        req_blob = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.req.json")
+        req_blob.upload_blob(json.dumps(ask_body, ensure_ascii=False), overwrite=True)
+
+        blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
+        initial_payload = {
+            "status": "queued",
+            "progress": 0,
+            "message": "Préparation de la réponse…",
+            "tool": "",
+            "partial_text": "",
+            "final_text": "",
+            "mode": "ask",
+            "selected_model": model,
+            "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        blob_client.upload_blob(json.dumps(initial_payload, ensure_ascii=False), overwrite=True)
+
+        try:
+            user_id = str((ask_body.get("user_id") or "").strip())
+            conv_raw = str((ask_body.get("conversation_id") or "").strip())
+            if user_id and (not conv_raw or conv_raw.lower() == "init"):
+                # Use timestamp for conversation_id instead of incremental counter
+                timestamp_id = int(time.time())
+                ask_body["conversation_id"] = f"{user_id}_{timestamp_id}"
+                
+                # Update the request blob with the generated conversation_id
+                req_blob.upload_blob(json.dumps(ask_body, ensure_ascii=False), overwrite=True)
+        except Exception:
+            pass
+
+        message = json.dumps({"job_id": job_id, "body": ask_body, "type": "ask"})
+        ttl_sec = int(os.getenv("MCP_JOBS_TTL_SECONDS", "3600"))
+        try:
+            storage["queue"].send_message(message, time_to_live=ttl_sec)
+        except TypeError:
+            storage["queue"].send_message(message)
+
+        response_payload = {
+            "ok": True,
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Préparation de la réponse…",
+            "progress": 0,
+            "tool": "",
+            "mode": "ask",
+            "selected_model": model,
+            "conversation_id": ask_body.get("conversation_id", ""),
+            "retry_after_sec": 3
+        }
+        resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json")
+        return _apply_cors(resp, req)
+    except Exception as e:
+        logging.exception("Error in /api/ask/start")
+        resp = func.HttpResponse(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
+        return _apply_cors(resp, req)
+
+
+@bp.route(route="ask/status", methods=[func.HttpMethod.GET, func.HttpMethod.OPTIONS], auth_level=func.AuthLevel.FUNCTION)
+def ask_status(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        if req.method == "OPTIONS":
+            return _preflight_response(req)
+        
+        job_id = req.params.get("job_id")
+        if not job_id:
+            resp = func.HttpResponse(json.dumps({"ok": False, "error": "Missing 'job_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
+            return _apply_cors(resp, req)
+
+        storage = _get_storage_clients(COPILOT_QUEUE_NAME)
+        blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
+        if not blob_client.exists():
+            response_payload = {
+                "ok": False,
+                "job_id": job_id,
+                "status": "unknown",
+                "message": "Job not found",
+                "progress": 0,
+                "tool": "",
+                "final_text": ""
+            }
+            resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json", status_code=404)
+            return _apply_cors(resp, req)
+
+        content = json.loads(blob_client.download_blob().readall().decode("utf-8"))
+
+        status = str(content.get("status", "")).lower()
+        progress = int(content.get("progress", 0))
+        
+        # Debug logging for unexpected status
+        logging.info(f"[ask/status] job_id={job_id}, status='{status}', content={json.dumps(content, ensure_ascii=False)}")
+        
+        # Map internal status to response format (same logic as orchestrate/status)
+        if status == "queued":
+            mapped_status = "queued"
+            message = content.get("message", "Préparation de la réponse…")
+            retry_after = 3
+        elif status == "running":
+            mapped_status = "running" 
+            message = content.get("message", "Génération en cours…")
+            retry_after = 2
+        elif status in ("done", "completed"):
+            mapped_status = "completed"
+            message = "Completed"
+            retry_after = None
+        elif status == "error":
+            mapped_status = "failed"
+            message = f"Error: {content.get('error', 'Unknown error')}"
+            retry_after = None
+        else:
+            mapped_status = "unknown"
+            message = content.get("message", "Status unknown")
+            retry_after = 5
+
+        # Handle tool usage status
+        tool_name = content.get("tool", "")
+        if tool_name and mapped_status == "running":
+            mapped_status = "tool"
+            current_message = content.get("message", "")
+            if current_message and ("cours" in current_message or "Utilisation" in current_message):
+                message = current_message
+            else:
+                # Provide specific tool messages for ask mode
+                if tool_name.lower() == "websearch":
+                    message = "Web search in progress..."
+                elif tool_name in ["list_templates_http", "list_images", "convert_word_to_pdf"]:
+                    message = f"Using tool: {tool_name}"
+                else:
+                    message = f"Using tool: {tool_name}"
+        elif mapped_status == "running" and not tool_name:
+            # Improve default running message for ask mode
+            if content.get("mode") == "ask":
+                message = content.get("message", "Réflexion en cours…")
+        
+        # Add 5 second delay for status polling to limit API calls
+        if mapped_status in ("queued", "running", "tool"):
+            time.sleep(5)
+
+        # Try to get conversation_id from request blob
+        conversation_id = ""
+        try:
+            req_blob = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.req.json")
+            if req_blob.exists():
+                req_content = json.loads(req_blob.download_blob().readall().decode("utf-8"))
+                conversation_id = req_content.get("conversation_id", "")
+        except Exception:
+            pass
+
+        response_payload = {
+            "ok": True,
+            "job_id": job_id,
+            "status": mapped_status,
+            "message": message,
+            "progress": progress,
+            "tool": tool_name,
+            "mode": content.get("mode", "ask"),
+            "selected_model": content.get("selected_model", ""),
+            "conversation_id": conversation_id,
+            "final_text": content.get("final_text", content.get("output_text", ""))
+        }
+
+        resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json")
+        if retry_after:
+            resp.headers["Retry-After"] = str(retry_after)
+        return _apply_cors(resp, req)
+    except Exception as e:
+        logging.exception("Error in /api/ask/status")
+        resp = func.HttpResponse(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
+        return _apply_cors(resp, req)

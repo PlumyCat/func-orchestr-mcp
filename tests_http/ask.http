@@ -1,0 +1,153 @@
+### Variables
+@host = http://localhost:7071
+# For PROD, uncomment the next line and comment the local host above
+# @host = https://func-api-sevepnpyddayk.azurewebsites.net
+
+@user_id = user123
+@conversation_id = 
+
+### Ask 1 - Basic request without memories
+# @name ask1
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Say hello and return a short response."
+}
+
+### Ask 2 - With user_id and specific model (gpt-4.1-nano)
+# @name ask2
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Say hello and return a short response.",
+  "user_id": "{{user_id}}",
+  "model": "gpt-4.1-nano"
+}
+
+### Ask 3 - With model router
+# @name ask3
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Say hello and return a short response.",
+  "user_id": "{{user_id}}",
+  "model": "model-router"
+}
+
+### Ask 4 - With OSS model
+# @name ask4
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Say hello and return a short response.",
+  "user_id": "{{user_id}}",
+  "model": "gpt-oss-120b"
+}
+
+### Ask 5 - Continue conversation
+# @name ask5
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Answer the question: What is the capital of France?",
+  "user_id": "{{user_id}}",
+  "conversation_id": "user123_1755474040",
+  "model": "gpt-4.1-nano"
+}
+
+### Ask 6 - Chat model without reasoning
+# @name ask6
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Summarize the advantages of Azure Functions in 3 bullet points.",
+  "model": "chat"
+}
+
+### Ask 7 - With reasoning effort
+# @name ask7
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Summarize the advantages of Azure Functions in 3 bullet points.",
+  "model": "gpt-5-mini",
+  "reasoning_effort": "low"
+}
+
+### Ask 8 - With websearch tool
+# @name ask8
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "What's the weather like in Paris today?",
+  "user_id": "{{user_id}}",
+  "model": "gpt-4.1-nano"
+}
+
+### Ask 9 - Convert Word to PDF (classic tools)
+# @name ask9
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Convert this Word document to PDF: https://example.com/sample.docx"
+}
+
+### Ask 10 - Initialize user blob container
+# @name ask10
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "Initialize my blob container.",
+  "model": "gpt-4.1-mini",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 11 - List images in storage
+# @name ask11
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 12 - List shared templates
+# @name ask12
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "List the shared templates available to everyone.",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 13 - List my templates
+# @name ask13
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "List my templates in storage.",
+  "user_id": "{{user_id}}"
+}
+
+### Ask 14 - Use multiple classic tools
+# @name ask14
+POST {{host}}/api/ask
+Content-Type: application/json
+
+{
+  "prompt": "List the shared templates available to everyone and my templates in storage.",
+  "user_id": "{{user_id}}"
+}
