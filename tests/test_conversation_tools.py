@@ -223,6 +223,83 @@ def test_mcp_tool_loop(monkeypatch):
     assert called == []
 
 
+class FakeMixedResponses:
+    def __init__(self):
+        self.submissions = []
+        self._store = {}
+
+    def create(self, **kwargs):
+        call = SimpleNamespace(id="mcp1", type="mcp", mcp=SimpleNamespace(method="one"))
+        submit = SimpleNamespace(tool_calls=[call])
+        required = SimpleNamespace(submit_tool_outputs=submit)
+        resp = SimpleNamespace(id="resp1", status="requires_action", required_action=required)
+        self._store[resp.id] = resp
+        return resp
+
+    def submit_tool_outputs(self, response_id, tool_outputs, model=None):
+        self.submissions.append((response_id, tool_outputs))
+        if response_id == "resp1":
+            call = SimpleNamespace(
+                id="classic", function=SimpleNamespace(name="list_images", arguments=json.dumps({}))
+            )
+            submit = SimpleNamespace(tool_calls=[call])
+            required = SimpleNamespace(submit_tool_outputs=submit)
+            resp = SimpleNamespace(id="resp2", status="requires_action", required_action=required)
+        elif response_id == "resp2":
+            call = SimpleNamespace(id="mcp2", type="mcp", mcp=SimpleNamespace(method="two"))
+            submit = SimpleNamespace(tool_calls=[call])
+            required = SimpleNamespace(submit_tool_outputs=submit)
+            resp = SimpleNamespace(id="resp3", status="requires_action", required_action=required)
+        else:
+            resp = SimpleNamespace(id="resp4", status="completed", output_text="mixed done")
+        self._store[resp.id] = resp
+        return resp
+
+    def wait(self, id, **kwargs):
+        return self._store[id]
+
+
+class FakeMixedClient:
+    def __init__(self):
+        self.responses = FakeMixedResponses()
+
+
+def test_mixed_mcp_classic_loop(monkeypatch, caplog):
+    fake_client = FakeMixedClient()
+    from app.services import tools as tools_module
+
+    executed = []
+
+    def fake_execute(name, args, context=None):
+        executed.append((name, context))
+        return "ok"
+
+    monkeypatch.setattr(tools_module, "execute_tool_call", fake_execute)
+    caplog.set_level(logging.INFO)
+
+    args = {
+        "model": "gpt-4.1",
+        "input": [],
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "store": False,
+    }
+
+    output_text, _ = conversation.run_responses_with_tools(
+        fake_client,
+        args,
+        allow_post_synthesis=False,
+        tool_context={"user_id": "u456"},
+    )
+
+    assert output_text == "mixed done"
+    assert executed == [("list_images", {"user_id": "u456"})]
+    assert len(fake_client.responses.submissions) == 3
+    messages = [rec.message for rec in caplog.records]
+    assert any("iteration 1" in m for m in messages)
+    assert any("iteration 2" in m for m in messages)
+    assert any("iteration 3" in m for m in messages)
+
+
 class FakeContextResponses:
     def __init__(self):
         self._store = {}
