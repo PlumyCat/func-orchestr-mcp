@@ -120,6 +120,7 @@ def run_responses_with_tools(
     client,
     responses_args: Dict[str, Any],
     allow_post_synthesis: bool = True,
+    tool_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[str], Any]:
     """
     Execute a Responses request that may include classic function tools. Handles the
@@ -139,6 +140,14 @@ def run_responses_with_tools(
         internal_user_id = str(responses_args.pop("x_user_id", "")).strip() or None
     except Exception:
         internal_user_id = None
+    try:
+        if internal_user_id:
+            if tool_context is None:
+                tool_context = {"user_id": internal_user_id}
+            elif "user_id" not in tool_context:
+                tool_context = {**tool_context, "user_id": internal_user_id}
+    except Exception:
+        pass
     model_name = responses_args.get("model")
     response = client.responses.create(**responses_args)
     try:
@@ -195,7 +204,7 @@ def run_responses_with_tools(
                 except Exception:
                     args = {}
                 logging.info("executing tool '%s' in iteration %d", name, i + 1)
-                output = execute_tool_call(name, args)
+                output = execute_tool_call(name, args, tool_context)
                 tool_outputs.append({"tool_call_id": call_id, "output": output})
                 executed_any_tool = True
                 try:
@@ -246,7 +255,7 @@ def run_responses_with_tools(
                 text_l = (user_text or "").lower()
                 realtime_markers = ("météo", "meteo", "weather", "forecast", "news", "actualité")
                 if has_search and user_text and any(k in text_l for k in realtime_markers):
-                    direct = execute_tool_call("search_web", {"query": user_text})
+                    direct = execute_tool_call("search_web", {"query": user_text}, tool_context)
                     if isinstance(direct, str) and direct.strip():
                         output_text = direct
                         fallback_text = direct
@@ -305,7 +314,7 @@ def run_responses_with_tools(
                     if ("init" in lower or "initialize" in lower or "initialiser" in lower or "initialisé" in lower or "initialise" in lower) and ("container" in lower or "blob" in lower):
                         if user_id_for_tools and ("init_user" in available_names):
                             args = {"user_id": user_id_for_tools}
-                            direct = execute_tool_call("init_user", args)
+                            direct = execute_tool_call("init_user", args, tool_context)
                             if isinstance(direct, str) and direct.strip():
                                 set_fallback_and_note("init_user", args, direct)
 
@@ -314,7 +323,7 @@ def run_responses_with_tools(
                         and ("image" in lower or "images" in lower) and not ("init" in lower or "initialize" in lower or "initialiser" in lower):
                         if user_id_for_tools and ("list_images" in available_names):
                             args = {"user_id": user_id_for_tools}
-                            direct = execute_tool_call("list_images", args)
+                            direct = execute_tool_call("list_images", args, tool_context)
                             if isinstance(direct, str) and direct.strip():
                                 set_fallback_and_note("list_images", args, direct)
 
@@ -322,7 +331,7 @@ def run_responses_with_tools(
                     if ("template" in lower or "templates" in lower) and ("partagé" in lower or "partages" in lower or "shared" in lower):
                         if "list_shared_templates" in available_names:
                             args = {}
-                            direct = execute_tool_call("list_shared_templates", args)
+                            direct = execute_tool_call("list_shared_templates", args, tool_context)
                             if isinstance(direct, str) and direct.strip():
                                 set_fallback_and_note("list_shared_templates", args, direct)
 
@@ -330,7 +339,7 @@ def run_responses_with_tools(
                     if ("template" in lower or "templates" in lower) and ("mes" in lower or "my" in lower):
                         if user_id_for_tools and ("list_templates_http" in available_names):
                             args = {"user_id": user_id_for_tools}
-                            direct = execute_tool_call("list_templates_http", args)
+                            direct = execute_tool_call("list_templates_http", args, tool_context)
                             if isinstance(direct, str) and direct.strip():
                                 set_fallback_and_note("list_templates_http", args, direct)
 
@@ -347,7 +356,7 @@ def run_responses_with_tools(
                                 blob_path = blob_candidate if ("/" in blob_candidate) else (f"{user_id_for_tools}/{blob_candidate}" if user_id_for_tools else None)
                                 if blob_path:
                                     args = {"blob": blob_path}
-                                    direct = execute_tool_call("convert_word_to_pdf", args)
+                                    direct = execute_tool_call("convert_word_to_pdf", args, tool_context)
                                     if isinstance(direct, str) and direct.strip():
                                         set_fallback_and_note("convert_word_to_pdf", args, direct)
                     # If any chunks gathered, set fallback_text from all

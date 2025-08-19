@@ -60,7 +60,7 @@ def test_multiple_tool_iterations_with_special_models(model_name, caplog, monkey
     fake_client = FakeClient(model_name)
     executed = []
 
-    def fake_execute(name, args):
+    def fake_execute(name, args, context=None):
         executed.append(name)
         return f"{name}-result"
     from app.services import tools as tools_module
@@ -126,7 +126,7 @@ def test_mcp_tool_loop(monkeypatch):
     from app.services import tools as tools_module
     called = []
 
-    def fake_execute(name, args):
+    def fake_execute(name, args, context=None):
         called.append(name)
         return "unused"
 
@@ -147,6 +147,67 @@ def test_mcp_tool_loop(monkeypatch):
     assert len(fake_client.responses.submissions) == 2
     assert all(len(outs) == 1 for _, outs in fake_client.responses.submissions)
     assert called == []
+
+
+class FakeContextResponses:
+    def __init__(self):
+        self._store = {}
+
+    def create(self, **kwargs):
+        call = SimpleNamespace(
+            id="call1",
+            function=SimpleNamespace(name="list_images", arguments=json.dumps({})),
+        )
+        submit = SimpleNamespace(tool_calls=[call])
+        required = SimpleNamespace(submit_tool_outputs=submit)
+        resp = SimpleNamespace(id="resp1", status="requires_action", required_action=required)
+        self._store[resp.id] = resp
+        return resp
+
+    def submit_tool_outputs(self, response_id, tool_outputs, model=None):
+        return SimpleNamespace(id="resp2", status="completed", output_text="ok")
+
+    def wait(self, id, **kwargs):
+        return self._store[id]
+
+
+class FakeContextClient:
+    def __init__(self):
+        self.responses = FakeContextResponses()
+
+
+def test_tool_context_propagated(monkeypatch):
+    fake_client = FakeContextClient()
+    from app.services import tools as tools_module
+
+    received = {}
+
+    def fake_execute(name, args, context=None):
+        received["name"] = name
+        received["args"] = args
+        received["context"] = context
+        return "listed"
+
+    monkeypatch.setattr(tools_module, "execute_tool_call", fake_execute)
+
+    args = {
+        "model": "gpt-4.1",
+        "input": [],
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "store": False,
+    }
+
+    output_text, _ = conversation.run_responses_with_tools(
+        fake_client,
+        args,
+        allow_post_synthesis=False,
+        tool_context={"user_id": "u123"},
+    )
+
+    assert output_text == "ok"
+    assert received["name"] == "list_images"
+    assert received["args"] == {}
+    assert received["context"] == {"user_id": "u123"}
 
 
 class FakeInProgressResponses:
@@ -186,7 +247,7 @@ def test_in_progress_polling(monkeypatch):
     from app.services import tools as tools_module
     executed = []
 
-    def fake_execute(name, args):
+    def fake_execute(name, args, context=None):
         executed.append(name)
         return "search-result"
 
@@ -225,7 +286,7 @@ def test_no_websearch_when_not_allowed(monkeypatch):
     from app.services import tools as tools_module
     calls = []
 
-    def fake_execute(name, args):
+    def fake_execute(name, args, context=None):
         calls.append(name)
         return "unused"
 
