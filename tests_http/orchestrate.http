@@ -133,3 +133,14 @@ Content-Type: application/json
   "allowed_tools": ["list_templates_http"],
   "user_id": "{{user_id}}"
 }
+
+### Orchestrate 12 - Tools without user_id
+# @name orchestrate12
+POST {{host}}/api/orchestrate
+Content-Type: application/json
+
+{
+  "prompt": "Hi, try testing the `hello_mcp` tool.",
+  "prefer_reasoning": false,
+  "allowed_tools": "hello_mcp"
+}
