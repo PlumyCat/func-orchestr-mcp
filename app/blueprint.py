@@ -241,7 +241,7 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
         try:
             raw_allowed = merged.get("allowed_tools")
             normalized_allowed = normalize_allowed_tools(raw_allowed)
-            if normalized_allowed is not None and ("search_web" not in normalized_allowed):
+            if not (normalized_allowed and ("*" in normalized_allowed or "search_web" in normalized_allowed)):
                 if responses_args.get("tools"):
                     filtered = []
                     for t in responses_args["tools"]:

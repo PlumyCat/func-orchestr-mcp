@@ -184,8 +184,14 @@ def mcp_process_worker(msg: func.QueueMessage) -> None:
         try:
             raw_allowed = body.get("allowed_tools") if isinstance(body, dict) else None
             normalized_allowed = normalize_allowed_tools(raw_allowed)
-            if normalized_allowed is not None:
-                # Filter tools to only include allowed ones
+            if not (normalized_allowed and ("*" in normalized_allowed or "search_web" in normalized_allowed)):
+                if responses_args.get("tools"):
+                    responses_args["tools"] = [
+                        t
+                        for t in responses_args["tools"]
+                        if (t.get("name") or t.get("function", {}).get("name")) != "search_web"
+                    ]
+            if normalized_allowed is not None and "*" not in normalized_allowed:
                 if responses_args.get("tools"):
                     filtered = []
                     for t in responses_args["tools"]:
@@ -194,7 +200,9 @@ def mcp_process_worker(msg: func.QueueMessage) -> None:
                         if name in normalized_allowed:
                             filtered.append(t)
                     responses_args["tools"] = filtered
-                    logging.info(f"[mcp-worker] Job {job_id} filtered tools to: {[t.get('name') or t.get('function', {}).get('name') for t in filtered]}")
+                    logging.info(
+                        f"[mcp-worker] Job {job_id} filtered tools to: {[t.get('name') or t.get('function', {}).get('name') for t in filtered]}"
+                    )
         except Exception:
             pass
 
