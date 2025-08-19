@@ -143,7 +143,12 @@ def _build_search_web_tool_def() -> Dict[str, Any]:
 
 def get_builtin_tools_config() -> List[Dict[str, Any]]:
     tools: List[Dict[str, Any]] = []
-    tools.append(_build_search_web_tool_def())
+
+    # Only expose web search if backend configuration is present
+    url, key = _websearch_env()
+    if url and key:
+        tools.append(_build_search_web_tool_def())
+
     tools.extend(_build_docsvc_tool_defs())
     return tools
 
