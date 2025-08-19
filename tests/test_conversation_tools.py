@@ -86,6 +86,80 @@ def test_multiple_tool_iterations_with_special_models(model_name, caplog, monkey
     assert any("iteration 2" in msg for msg in messages)
 
 
+class LongChainResponses:
+    def __init__(self, chain_length):
+        self.chain_length = chain_length
+        self.step = 0
+        self._store = {}
+
+    def _build_response(self):
+        if self.step < self.chain_length:
+            call = SimpleNamespace(
+                id=f"call{self.step}",
+                function=SimpleNamespace(name=f"tool{self.step}", arguments=json.dumps({})),
+            )
+            submit = SimpleNamespace(tool_calls=[call])
+            required = SimpleNamespace(submit_tool_outputs=submit)
+            resp = SimpleNamespace(
+                id=f"resp{self.step}", status="requires_action", required_action=required
+            )
+        else:
+            resp = SimpleNamespace(id=f"resp{self.step}", status="completed", output_text="done")
+        self._store[resp.id] = resp
+        return resp
+
+    def create(self, **kwargs):
+        return self._build_response()
+
+    def submit_tool_outputs(self, response_id, tool_outputs, model=None):
+        self.step += 1
+        return self._build_response()
+
+    def wait(self, id, **kwargs):
+        return self._store[id]
+
+
+class LongChainClient:
+    def __init__(self, chain_length):
+        self.responses = LongChainResponses(chain_length)
+
+
+@pytest.mark.parametrize("limit, expect_done", [(10, True), (5, False)])
+def test_long_tool_chain(monkeypatch, limit, expect_done, caplog):
+    monkeypatch.setenv("MAX_TOOL_LOOPS", str(limit))
+    fake_client = LongChainClient(chain_length=7)
+    executed = []
+
+    def fake_execute(name, args, context=None):
+        executed.append(name)
+        return "ok"
+
+    from app.services import tools as tools_module
+
+    monkeypatch.setattr(tools_module, "execute_tool_call", fake_execute)
+    caplog.set_level(logging.INFO)
+
+    args = {
+        "model": "gpt-4.1",
+        "input": [],
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "store": False,
+    }
+
+    output_text, resp = conversation.run_responses_with_tools(
+        fake_client, args, allow_post_synthesis=False
+    )
+
+    if expect_done:
+        assert output_text == "done"
+        assert len(executed) == 7
+    else:
+        assert output_text is None
+        assert len(executed) == limit
+        assert getattr(resp, "status", None) == "requires_action"
+        assert any("tool loop limit" in rec.message for rec in caplog.records)
+
+
 class FakeMCPResponses:
     def __init__(self):
         self.submissions = []
