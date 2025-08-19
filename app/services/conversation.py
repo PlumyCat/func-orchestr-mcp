@@ -133,8 +133,8 @@ def run_responses_with_tools(
         internal_user_id = str(responses_args.pop("x_user_id", "")).strip() or None
     except Exception:
         internal_user_id = None
-    response = client.responses.create(**responses_args)
     model_name = responses_args.get("model")
+    response = client.responses.create(**responses_args)
     max_loops = 6
     executed_any_tool = False
     used_tools: List[Dict[str, Any]] = []
@@ -186,6 +186,8 @@ def run_responses_with_tools(
                 logging.exception("tool execution failed; returning error text to model")
                 tool_outputs.append({"tool_call_id": getattr(call, "id", ""), "output": "Tool execution failed."})
         submit_kwargs = {"response_id": getattr(response, "id", None), "tool_outputs": tool_outputs}
+        if model_name:
+            submit_kwargs["model"] = model_name
         response = client.responses.submit_tool_outputs(**submit_kwargs)
     else:
         if getattr(response, "status", None) == "requires_action":
