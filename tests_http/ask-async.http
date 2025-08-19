@@ -65,7 +65,7 @@ Content-Type: application/json
 
 {
   "prompt": "List my images in storage.",
-  "model": "gpt-4.1-mini", 
+  "model": "gpt-5-mini", 
   "user_id": "{{user_id}}",
   "conversation_id": "init",
   "allowed_tools": ["list_images"]

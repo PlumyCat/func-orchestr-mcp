@@ -85,3 +85,8 @@ Accept: application/json
 # @name copilot_status_auto
 GET {{host}}/api/orchestrate/status?job_id={{copilot_start_tools.response.body.job_id}}
 Accept: application/json
+
+### Orchestrate Status - Auto job ID from previous request With tools (websearch)
+# @name copilot_status_auto
+GET {{host}}/api/orchestrate/status?job_id={{copilot_start_classic.response.body.job_id}}
+Accept: application/json
