@@ -340,7 +340,7 @@ def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
                                         return resp
         except Exception:
             pass
-        if has_classic_tools:
+        if responses_args.get("tools"):
             tool_context = {"user_id": user_id} if user_id else None
             output_text, response = run_responses_with_tools(client, responses_args, tool_context=tool_context)
             if not output_text:
@@ -666,9 +666,8 @@ def queue_trigger(msg: func.QueueMessage) -> None:
         partial_chunks: List[str] = []
         progress_value: int = 1
         try:
-            # If classic tools exist, avoid streaming and run tool loop
-            # If any classic function tools remain, run tool loop; otherwise, use streaming
-            if any((t.get("type") == "function") for t in (responses_args.get("tools") or [])):
+            # If any tools exist, avoid streaming and run tool loop; otherwise, stream
+            if responses_args.get("tools"):
                 tool_context = {"user_id": user_id_ctx} if user_id_ctx else None
                 output_text, _ = run_responses_with_tools(client, responses_args, tool_context=tool_context)
                 if not output_text:

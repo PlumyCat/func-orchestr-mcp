@@ -281,7 +281,7 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
                     responses_args["x_user_id"] = user_id
             except Exception:
                 pass
-            if len(get_builtin_tools_config()) > 0:
+            if responses_args.get("tools"):
                 tool_context = {"user_id": user_id} if user_id else None
                 output_text, response = run_responses_with_tools(client, responses_args, tool_context=tool_context)
                 if not output_text:
@@ -324,7 +324,7 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
                     responses_args["x_user_id"] = user_id
             except Exception:
                 pass
-            if len(get_builtin_tools_config()) > 0:
+            if responses_args.get("tools"):
                 tool_context = {"user_id": user_id} if user_id else None
                 output_text, response = run_responses_with_tools(client, responses_args, tool_context=tool_context)
                 if not output_text:
@@ -689,8 +689,8 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
                                     return resp
             except Exception:
                 pass
-            # If classic tools exist, use tool loop to allow auto tools in any mode
-            if has_classic_tools:
+            # If any tools are configured, use tool loop to allow repeated tool calls
+            if responses_args.get("tools"):
                 tool_context = {"user_id": user_id} if user_id else None
                 output_text, response = run_responses_with_tools(client, responses_args, tool_context=tool_context)
                 # Fallback: if no textual output, retry once without tools to ensure an answer

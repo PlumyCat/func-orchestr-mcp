@@ -206,10 +206,11 @@ def mcp_process_worker(msg: func.QueueMessage) -> None:
         except Exception:
             pass
 
-        # Check for classic function tools and reasoning effort
+        # Check for tool availability
         has_classic_tools = any(
             (t.get("type") == "function") for t in (responses_args.get("tools") or [])
         )
+        has_tools = bool(responses_args.get("tools"))
         
         # Determine if this is a reasoning task (deep thinking)
         is_reasoning_task = reasoning_effort in ("medium", "high") or any(
@@ -248,8 +249,8 @@ def mcp_process_worker(msg: func.QueueMessage) -> None:
         output_text: Optional[str] = None
         tools_used_during_run: List[str] = []
 
-        if has_classic_tools:
-            # Use synchronous tool loop for classic function tools
+        if has_tools:
+            # Use synchronous tool loop for any tools
             _update_job_status(job_id, "running", 20, "Processing with tools...", created_at=created_at)
             
             # Force explicit tool selection for tool usage
