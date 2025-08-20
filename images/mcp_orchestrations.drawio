@@ -218,7 +218,7 @@
                 <mxCell id="11" value="Write final result {status: done, output_text, progress: 100, duration_ms} → Blob {job_id}.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;" parent="1" vertex="1">
                     <mxGeometry x="2600" y="200" width="540" height="70" as="geometry"/>
                 </mxCell>
-                <mxCell id="12" value="Azure Function /api/mcp-result?job_id=… (client polls)" style="rounded=1;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+                <mxCell id="12" value="Azure Function /api/mcp-process (client processes job)" style="rounded=1;whiteSpace=wrap;html=1;" parent="1" vertex="1">
                     <mxGeometry x="660" y="340" width="420" height="60" as="geometry"/>
                 </mxCell>
                 <mxCell id="13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;" parent="1" source="2" target="3" edge="1">
