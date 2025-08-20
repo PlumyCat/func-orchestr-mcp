@@ -421,11 +421,6 @@ Content-Type: application/json
   "job_id": "{{job_id}}"
 }
 
-### MCP Result (poll job status/result)
-# @name mcp_result
-GET {{host}}/api/mcp-result?job_id={{job_id}}&return_partial_output=true
-Accept: application/json
-
 
 
 

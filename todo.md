@@ -564,7 +564,6 @@ mcp_run: [POST] http://localhost:7071/api/mcp-run
 Permet seulement l'utilisation des tools MCP sans streaming
 
 mcp_process: [POST,OPTIONS] http://localhost:7071/api/mcp-process
-mcp_result: [GET,OPTIONS] http://localhost:7071/api/mcp-result
 
 meme que mcp-run avec streaming
 

@@ -231,30 +231,6 @@ paths:
           description: Missing job_id
         "404":
           description: Unknown job
-  /api/mcp-result:
-    get:
-      summary: Get the status/result of a queued job
-      operationId: McpResult
-      parameters:
-        - name: job_id
-          in: query
-          required: true
-          type: string
-        - name: return_partial_output
-          in: query
-          required: false
-          type: boolean
-      responses:
-        "200":
-          description: Job status/result
-          schema:
-            type: object
-            additionalProperties: true
-        "404":
-          description: Not found
-          schema:
-            type: object
-            additionalProperties: true
   /api/mcp-memories:
     get:
       summary: List stored memories for a user

@@ -17,12 +17,20 @@ Content-Type: application/json
   "allowed_tools": "*"
 }
 
-### MCP Result - Poll job status/result (manual job ID)
-# @name mcp_result
-GET {{host}}/api/mcp-result?job_id={{job_id}}&return_partial_output=true
-Accept: application/json
+### MCP Process - Process job (manual job ID)
+# @name mcp_process
+POST {{host}}/api/mcp-process
+Content-Type: application/json
 
-### MCP Result - Poll job status/result (auto job ID from enqueue)
-# @name mcp_result_auto
-GET {{host}}/api/mcp-result?job_id={{mcp_enqueue.response.body.job_id}}&return_partial_output=true
-Accept: application/json
+{
+  "job_id": "{{job_id}}"
+}
+
+### MCP Process - Process job (auto job ID from enqueue)
+# @name mcp_process_auto
+POST {{host}}/api/mcp-process
+Content-Type: application/json
+
+{
+  "job_id": "{{mcp_enqueue.response.body.job_id}}"
+}
