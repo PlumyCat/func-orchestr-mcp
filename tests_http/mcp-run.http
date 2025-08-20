@@ -119,3 +119,13 @@ Content-Type: application/json
   "allowed_tools": "hello_mcp",
   "stream": false
 }
+
+### MCP Run 10 - Simple greeting
+# @name mcp_run_basic_simple
+POST {{host}}/api/mcp-run
+Content-Type: application/json
+
+{
+  "prompt": "Say hello from mcp run.",
+  "stream": false
+}

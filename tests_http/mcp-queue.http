@@ -34,3 +34,14 @@ Content-Type: application/json
 {
   "job_id": "{{mcp_enqueue.response.body.job_id}}"
 }
+
+### MCP Process - Direct prompt streaming
+# @name mcp_process_direct_run
+POST {{host}}/api/mcp-process
+Content-Type: application/json
+
+{
+  "prompt": "Stream a short acknowledgement.",
+  "stream": true,
+  "allowed_tools": "*"
+}
