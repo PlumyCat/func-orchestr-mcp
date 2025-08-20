@@ -16,6 +16,8 @@ from .services.conversation import (
     build_responses_args,
     run_responses_with_tools,
     build_system_message_text,
+    orchestrator_models,
+    route_mode,
 )
 from .services.memory import (
     list_memories as cosmos_list_memories,
@@ -74,48 +76,6 @@ def _preflight_response(req: func.HttpRequest) -> func.HttpResponse:
         headers["Access-Control-Allow-Origin"] = origin
     return func.HttpResponse(status_code=204, headers=headers)
 
-
-def _orchestrator_models() -> dict:
-    return {
-        "trivial": os.getenv("ORCHESTRATOR_MODEL_TRIVIAL"),
-        "standard": os.getenv("ORCHESTRATOR_MODEL_STANDARD"),
-        "tools": os.getenv("ORCHESTRATOR_MODEL_TOOLS"),
-        "deep": os.getenv("ORCHESTRATOR_MODEL_REASONING"),
-    }
-
-
-def _route_mode(prompt: str, has_tools: bool, constraints: dict, allowed_tools: Optional[List[str]] = None) -> str:
-    # Only select tools mode if caller explicitly allows tools
-    if has_tools and allowed_tools:
-        return "tools"
-    # Accept both camelCase and snake_case flags and flat boolean values
-    prefer_reasoning = False
-    try:
-        prefer_reasoning = str(constraints.get("preferReasoning", "")).lower() in ("1", "true", "yes", "on") or \
-                           str(constraints.get("prefer_reasoning", "")).lower() in ("1", "true", "yes", "on")
-    except Exception:
-        prefer_reasoning = False
-    try:
-        max_latency_ms = int(constraints.get("maxLatencyMs")) if constraints.get("maxLatencyMs") is not None else None
-    except Exception:
-        max_latency_ms = None
-    text = (prompt or "").lower()
-    # Include French markers so FR prompts can trigger reasoning automatically
-    deep_markers = (
-        "plan", "multi-step", "derive", "prove", "why", "strategy", "chain of thought",
-        "plan d'action", "multi-etapes", "multi étapes", "démontrer", "demontrer", "prouve", "pourquoi",
-        "stratégie", "strategie", "raisonnement", "chaine de raisonnement", "chaîne de raisonnement",
-        "réfléchis", "reflechis", "pas à pas", "pas a pas", "analyse détaillée", "explication détaillée"
-    )
-    if prefer_reasoning or any(m in text for m in deep_markers) or len(prompt) > 800:
-        # If explicit latency budget is tight, downshift to standard
-        if max_latency_ms is not None and max_latency_ms < 1500:
-            return "standard"
-        return "deep"
-    # length-based quick rule
-    if len(prompt) < 160:
-        return "trivial"
-    return "standard"
 
 
 def _apply_cors(resp: func.HttpResponse, req: func.HttpRequest) -> func.HttpResponse:
@@ -437,8 +397,8 @@ def orchestrate_start(req: func.HttpRequest) -> func.HttpResponse:
             mcp_tool_cfg = None
 
         # Route mode using orchestration logic
-        mode = _route_mode(prompt, has_tools=(mcp_tool_cfg is not None), constraints=constraints, allowed_tools=normalized_tools)
-        models = _orchestrator_models()
+        mode = route_mode(prompt, has_tools=(mcp_tool_cfg is not None), constraints=constraints, allowed_tools=normalized_tools)
+        models = orchestrator_models()
         selected_model = models["deep" if mode == "deep" else ("tools" if mode == "tools" else mode)]
         reasoning_effort = (body.get("reasoning_effort") if isinstance(body, dict) else (qp.get("reasoning_effort") if qp else None)) or "low"
 
