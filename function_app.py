@@ -19,6 +19,7 @@ from app.services.tools import (
     normalize_allowed_tools,
     get_builtin_tools_config,
     execute_tool_call,
+    _websearch_env,
 )
 from app.services.conversation import (
     build_responses_args,
@@ -201,11 +202,33 @@ def websearch_test(req: func.HttpRequest) -> func.HttpResponse:
                 "arguments": tc.function.arguments,
             }
 
-            # ⚠️ Ici tu devrais appeler ton vrai backend SearXNG
-            # Pour la démo, on simule une réponse
-            fake_result = {
-                "summary": f"(Résultat factice pour query={tc.function.arguments})"
-            }
+            # Call the real websearch backend
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            url, key = _websearch_env()
+            tool_payload = args if isinstance(args, dict) else {}
+            if url:
+                final_url = url
+                if key and ("?code=" not in url) and ("&code=" not in url):
+                    sep = "&" if ("?" in url) else "?"
+                    final_url = f"{url}{sep}code={key}"
+                try:
+                    resp = requests.post(
+                        final_url,
+                        headers={"Content-Type": "application/json"},
+                        json=tool_payload,
+                        timeout=30,
+                    )
+                    if resp.headers.get("content-type", "").startswith("application/json"):
+                        tool_result = resp.json()
+                    else:
+                        tool_result = {"summary": resp.text}
+                except Exception as e:
+                    tool_result = {"error": str(e)}
+            else:
+                tool_result = {"error": "Websearch backend not configured."}
 
             # On boucle en envoyant la réponse tool
             follow_up = client.chat.completions.create(
@@ -215,7 +238,7 @@ def websearch_test(req: func.HttpRequest) -> func.HttpResponse:
                     {
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": json.dumps(fake_result),
+                        "content": json.dumps(tool_result),
                     },
                 ],
             )

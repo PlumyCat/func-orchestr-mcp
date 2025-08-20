@@ -41,7 +41,7 @@ Le projet offre **6 modes d'utilisation** distincts :
 - Pas compatible Copilot Studio (pas de streaming)
 - Usage avancé pour intégrations spécifiques
 
-**4. `POST /api/websearch-test`** - Test simple `search_web`
+**4. `POST /api/websearch-test`** - Test simple `search_web` (nécessite `WEBSEARCH_FUNCTION_URL` et éventuellement `WEBSEARCH_FUNCTION_KEY`)
 - Exemple minimal d'appel avec l'outil `search_web` utilisé automatiquement
 
 ### ⚡ **Endpoints Asynchrones Streaming (Job + Polling)**
