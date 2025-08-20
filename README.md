@@ -4,11 +4,11 @@
 
 Voici quelques diagrammes pour illustrer l'architecture et les flux principaux du projet :
 
-![Flux HTTP Ask](images/ask-http-flow.png)
+![Flux HTTP Ask](images/mcp_orchestrations-ask-http-flow.png)
 
-![Modèle mémoire Cosmos](images/mcp_Cosmos-memory-model.png)
+![Modèle mémoire Cosmos](images/mcp_orchestrations-cosmos-memory-model.png)
 
-![Endpoints MCP](images/mcp_endpoints-flow.png)
+![Endpoints MCP](images/mcp_orchestrations-endpoints-flow.png)
 
 ![Flux HTTP Orchestrations](images/mcp_orchestrations-http-flow.png)
 
