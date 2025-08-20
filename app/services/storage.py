@@ -6,7 +6,7 @@ from azure.storage.queue import QueueClient
 from azure.storage.blob import BlobServiceClient
 
 
-def get_storage_clients() -> Dict[str, Any]:
+def get_storage_clients(queue_name: str = "mcpjobs") -> Dict[str, Any]:
     conn_str = os.getenv("AzureWebJobsStorage")
     if conn_str and conn_str.strip().lower().startswith("usedevelopmentstorage=true"):
         conn_str = (
@@ -18,11 +18,11 @@ def get_storage_clients() -> Dict[str, Any]:
         )
     if not conn_str:
         raise RuntimeError("Missing AzureWebJobsStorage connection string.")
-    queue_name = "mcpjobs"
+    container = os.getenv("MCP_JOBS_CONTAINER", "jobs")
     return {
         "queue": QueueClient.from_connection_string(conn_str, queue_name=queue_name),
         "blob": BlobServiceClient.from_connection_string(conn_str),
-        "container": "jobs",
+        "container": container,
     }
 
 

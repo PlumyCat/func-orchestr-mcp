@@ -7,8 +7,6 @@ import random
 from typing import Any, Dict, Optional, List
 
 import azure.functions as func
-from azure.storage.queue import QueueClient
-from azure.storage.blob import BlobServiceClient
 
 from .services.tools import resolve_mcp_config, normalize_allowed_tools
 from .services.routing import _orchestrator_models, _route_mode
@@ -30,6 +28,7 @@ from .services.memory import (
     get_conversation_messages as cosmos_get_conversation_messages,
     upsert_conversation_turn as cosmos_upsert_conversation_turn,
 )
+from .services.storage import get_storage_clients
 
 
 bp = func.Blueprint()
@@ -93,27 +92,8 @@ def _apply_cors(resp: func.HttpResponse, req: func.HttpRequest) -> func.HttpResp
     return resp
 
 
-def _get_storage_clients(queue_name: str = QUEUE_NAME) -> Dict[str, Any]:
-    conn_str = os.getenv("AzureWebJobsStorage")
-    if conn_str and conn_str.strip().lower().startswith("usedevelopmentstorage=true"):
-        conn_str = (
-            "DefaultEndpointsProtocol=http;"
-            "AccountName=devstoreaccount1;"
-            "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
-            "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
-            "QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;"
-        )
-    if not conn_str:
-        raise RuntimeError("Missing AzureWebJobsStorage connection string.")
-    return {
-        "queue": QueueClient.from_connection_string(conn_str, queue_name=queue_name),
-        "blob": BlobServiceClient.from_connection_string(conn_str),
-        "container": os.getenv("MCP_JOBS_CONTAINER", "jobs"),
-    }
-
-
 def _get_job_result(job_id: str, return_partial: bool) -> Dict[str, Any]:
-    storage = _get_storage_clients()
+    storage = get_storage_clients()
     blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
     if not blob_client.exists():
         return {"job_id": job_id, "status": "unknown"}
@@ -196,7 +176,7 @@ def queue_trigger(msg: func.QueueMessage) -> None:
             return
         logging.info(f"[mcp-queue] start job_id={job_id}")
 
-        storage = _get_storage_clients()
+        storage = get_storage_clients()
 
         blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
         created_at: Optional[str] = None
@@ -397,7 +377,7 @@ def queue_trigger(msg: func.QueueMessage) -> None:
         try:
             job = job_id if 'job_id' in locals() else 'unknown'
             try:
-                storage = _get_storage_clients()
+                storage = get_storage_clients()
                 blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job}.json")
                 blob_client.upload_blob(json.dumps({"status": "error", "error": str(e)}), overwrite=True)
             except Exception:
@@ -512,7 +492,7 @@ def orchestrate_start(req: func.HttpRequest) -> func.HttpResponse:
 
         job_id = str(uuid.uuid4())
 
-        storage = _get_storage_clients(COPILOT_QUEUE_NAME)
+        storage = get_storage_clients(COPILOT_QUEUE_NAME)
         try:
             storage["queue"].create_queue()
         except Exception:
@@ -592,7 +572,7 @@ def orchestrate_status(req: func.HttpRequest) -> func.HttpResponse:
             resp = func.HttpResponse(json.dumps({"ok": False, "error": "Missing 'job_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
             return _apply_cors(resp, req)
 
-        storage = _get_storage_clients(COPILOT_QUEUE_NAME)
+        storage = get_storage_clients(COPILOT_QUEUE_NAME)
         blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
         if not blob_client.exists():
             response_payload = {
@@ -731,7 +711,7 @@ def ask_start(req: func.HttpRequest) -> func.HttpResponse:
 
         job_id = str(uuid.uuid4())
 
-        storage = _get_storage_clients(COPILOT_QUEUE_NAME)
+        storage = get_storage_clients(COPILOT_QUEUE_NAME)
         try:
             storage["queue"].create_queue()
         except Exception:
@@ -810,7 +790,7 @@ def ask_status(req: func.HttpRequest) -> func.HttpResponse:
             resp = func.HttpResponse(json.dumps({"ok": False, "error": "Missing 'job_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
             return _apply_cors(resp, req)
 
-        storage = _get_storage_clients(COPILOT_QUEUE_NAME)
+        storage = get_storage_clients(COPILOT_QUEUE_NAME)
         blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
         if not blob_client.exists():
             response_payload = {
