@@ -100,3 +100,11 @@ Accept: application/json
 # @name ask_status_tool
 GET {{host}}/api/ask/status?job_id={{ask_start_tool.response.body.job_id}}
 Accept: application/json
+
+### 
+POST http://localhost:7071/api/websearch-test
+Content-Type: application/json
+
+{
+  "prompt": "What are the latest updates in Azure Functions pricing for 2024?"
+}

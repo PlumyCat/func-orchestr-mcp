@@ -1,0 +1,16 @@
+### Variables
+@host = http://localhost:7071
+@user_id = user591
+
+### word-create-document-test
+# @name word-create-document-test
+POST {{host}}/api/word-create-document-test
+Accept: application/json
+
+{
+    "prompt": "Create a doc from template and set properties.",
+    "user_id": "user123",
+    "filename": "test.docx",
+    "title": "Demo Title",
+    "author": "Eric"
+}

@@ -3,6 +3,7 @@ import logging
 import os
 import time
 import uuid
+import requests
 from typing import Optional, List
 import azure.functions as func
 from openai import AzureOpenAI
@@ -132,6 +133,22 @@ def list_models(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
 
 
+def _build_search_web_tool_def():
+    return {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "Perform a web search via Azure Function (SearXNG).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"],
+            },
+        },
+    }
+
 # Simple endpoint demonstrating automatic use of the `search_web` tool
 @app.function_name("websearch_test")
 @app.route(route="websearch-test", methods=["POST"])
@@ -144,45 +161,70 @@ def websearch_test(req: func.HttpRequest) -> func.HttpResponse:
     prompt = (body.get("prompt") or qp.get("prompt") or "").strip()
     if not prompt:
         return func.HttpResponse(
-            json.dumps({"error": "Missing 'prompt'"}, ensure_ascii=False),
+            json.dumps({"error": "Missing 'prompt'"}),
             status_code=400,
             mimetype="application/json",
         )
 
-    # Select a tools-capable model (falling back to AZURE_OPENAI_MODEL)
-    model = os.getenv("ORCHESTRATOR_MODEL_TOOLS") or os.getenv("AZURE_OPENAI_MODEL")
-    if not model:
-        return func.HttpResponse(
-            json.dumps({"error": "Missing ORCHESTRATOR_MODEL_TOOLS or AZURE_OPENAI_MODEL"}, ensure_ascii=False),
-            status_code=500,
-            mimetype="application/json",
-        )
-
-    responses_args = build_responses_args(model, prompt, None, "low")
-    tools = responses_args.get("tools") or []
-    responses_args["tools"] = [
-        t
-        for t in tools
-        if (t.get("name") or t.get("function", {}).get("name")) == "search_web"
-    ]
-    if not responses_args["tools"]:
-        return func.HttpResponse(
-            json.dumps({"error": "websearch tool not configured"}, ensure_ascii=False),
-            status_code=500,
-            mimetype="application/json",
-        )
-    responses_args["tool_choice"] = "auto"
-
+    model = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
     client = _get_aoai_client()
-    output_text, response = run_responses_with_tools(client, responses_args)
-    result = {"answer": output_text}
+
+    # Messages
+    messages = [{"role": "user", "content": prompt}]
+
+    # Tool unique
+    tools = [_build_search_web_tool_def()]
+
     try:
-        used = getattr(response, "_classic_tools_used", None)
-        if used:
-            result["tools_used"] = used
-    except Exception:
-        pass
-    return func.HttpResponse(json.dumps(result, ensure_ascii=False), mimetype="application/json")
+        # Premier appel : voir si le modèle déclenche la tool
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+
+        result = {"answer": msg.content}
+        if msg.tool_calls:
+            # Le modèle a demandé la tool
+            tc = msg.tool_calls[0]
+            result["tool_called"] = {
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+
+            # ⚠️ Ici tu devrais appeler ton vrai backend SearXNG
+            # Pour la démo, on simule une réponse
+            fake_result = {
+                "summary": f"(Résultat factice pour query={tc.function.arguments})"
+            }
+
+            # On boucle en envoyant la réponse tool
+            follow_up = client.chat.completions.create(
+                model=model,
+                messages=messages + [
+                    msg,
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(fake_result),
+                    },
+                ],
+            )
+            result["answer"] = follow_up.choices[0].message.content
+
+        return func.HttpResponse(
+            json.dumps(result, ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    except Exception as e:
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )
 
 # Simple ask http POST function that returns the completion based on prompt
 @app.function_name("ask")
@@ -202,6 +244,7 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
         # Allow model override via body and query param
         qp = getattr(req, 'params', {}) or {}
         body_model = body.get("model") if isinstance(body, dict) else None
+        logging.debug(f"ask: body_model={body_model} qp_model={qp.get('model') if qp else None}")
         qp_model = qp.get("model") if qp else None
         base_default = (os.getenv("AZURE_OPENAI_MODEL"))
         model = (body_model or qp_model, base_default) or base_default
@@ -738,3 +781,745 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.exception("orchestrate failed")
         return func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
+
+
+def _get_json(req: func.HttpRequest) -> dict:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+    return body or {}
+
+def _qp(req: func.HttpRequest) -> dict:
+    return getattr(req, "params", {}) or {}
+
+def _json_response(payload, status=200):
+    return func.HttpResponse(
+        json.dumps(payload, ensure_ascii=False),
+        status_code=status,
+        mimetype="application/json",
+    )
+
+
+def _call_list_images_backend(args: dict) -> tuple[int, dict]:
+    base = os.getenv("DOCSVC_BASE_URL")
+    url = f"{base.rstrip('/')}/api/users/images"
+    timeout_s = float(os.getenv("DOCSVC_TIMEOUT_SECONDS"))
+
+    payload = {"user_id": args.get("user_id")}
+    if "pageSize" in args and args["pageSize"]:
+        payload["pageSize"] = int(args["pageSize"])
+
+    r = requests.get(url, json=payload, timeout=timeout_s)
+    try:
+        data = r.json()
+    except Exception:
+        data = {"raw": r.text}
+    return r.status_code, data
+
+def _build_list_images_tool_def():
+    return {
+        "type": "function",
+        "function": {
+            "name": "list_images",
+            "description": "List a user's images.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {
+                        "type": "string",
+                        "description": "User identifier"
+                    },
+                    "pageSize": {
+                        "type": "integer",
+                        "description": "Max items per page (optional)"
+                    }
+                },
+                "required": ["user_id"],
+            },
+        },
+    }
+
+@app.function_name("list_images_test")
+@app.route(route="list-images-test", methods=["POST"])
+def list_images_test(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing 'prompt'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    model = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
+    client = _get_aoai_client()
+
+    messages = [{"role": "user", "content": prompt}]
+    if body.get("user_id"):
+        messages.append({"role": "system", "content": f"user_id={body['user_id']}"})
+    if body.get("pageSize"):
+        messages.append({"role": "system", "content": f"pageSize={body['pageSize']}"})
+
+    tools = [_build_list_images_tool_def()]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+        result = {"answer": msg.content}
+
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            result["tool_called"] = {
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+
+            base = os.getenv("DOCSVC_BASE_URL").rstrip("/")
+            func_key = os.getenv("DOCSVC_FUNCTION_KEY")
+            backend_url = f"{base}/users/images?code={func_key}"
+
+            headers = {"Content-Type": "application/json"}
+            r = requests.get(backend_url, json=json.loads(tc.function.arguments), headers=headers, timeout=20)
+            try:
+                backend_data = r.json()
+            except Exception:
+                backend_data = {"raw": r.text}
+
+            follow_up = client.chat.completions.create(
+                model=model,
+                messages=messages + [
+                    msg,
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(backend_data),
+                    },
+                ],
+            )
+            result["answer"] = follow_up.choices[0].message.content
+            result["backend_result"] = backend_data
+
+        return func.HttpResponse(
+            json.dumps(result, ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    except Exception as e:
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+
+def _build_list_templates_tool_def():
+    return {
+        "type": "function",
+        "function": {
+            "name": "list_templates_http",
+            "description": "List a user's templates (optionally include shared).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {
+                        "type": "string",
+                        "description": "User identifier"
+                    },
+                    "pageSize": {
+                        "type": "integer",
+                        "description": "Max items per page (optional)"
+                    },
+                    "includeShared": {
+                        "type": "boolean",
+                        "description": "Whether to include shared templates"
+                    }
+                },
+                "required": ["user_id"],
+            },
+        },
+    }
+
+
+@app.function_name("list_templates_test")
+@app.route(route="list-templates-test", methods=["POST"])
+def list_templates_test(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing 'prompt'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    model = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
+    client = _get_aoai_client()
+
+    messages = [{"role": "user", "content": prompt}]
+    if body.get("user_id"):
+        messages.append({"role": "system", "content": f"user_id={body['user_id']}"})
+    if body.get("pageSize"):
+        messages.append({"role": "system", "content": f"pageSize={body['pageSize']}"})
+    if body.get("includeShared") is not None:
+        messages.append({"role": "system", "content": f"includeShared={body['includeShared']}"})
+
+    tools = [_build_list_templates_tool_def()]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+        result = {"answer": msg.content}
+
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            result["tool_called"] = {
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+
+            base = os.getenv("DOCSVC_BASE_URL").rstrip("/")
+            func_key = os.getenv("DOCSVC_FUNCTION_KEY")
+            backend_url = f"{base}/users/templates?code={func_key}"
+
+            headers = {"Content-Type": "application/json"}
+            r = requests.get(backend_url, json=json.loads(tc.function.arguments), headers=headers, timeout=int(os.getenv("DOCSVC_TIMEOUT_SECONDS", "20")))
+            try:
+                backend_data = r.json()
+            except Exception:
+                backend_data = {"raw": r.text}
+
+            follow_up = client.chat.completions.create(
+                model=model,
+                messages=messages + [
+                    msg,
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(backend_data),
+                    },
+                ],
+            )
+            result["answer"] = follow_up.choices[0].message.content
+            result["backend_result"] = backend_data
+
+        return func.HttpResponse(
+            json.dumps(result, ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    except Exception as e:
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+
+def _build_list_shared_templates_tool_def():
+    return {
+        "type": "function",
+        "function": {
+            "name": "list_shared_templates",
+            "description": "List shared templates (all locales) from the org prefix.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pageSize": {
+                        "type": "integer",
+                        "description": "Max items per page (optional)"
+                    }
+                },
+                "additionalProperties": False
+            },
+        },
+    }
+
+
+@app.function_name("list_shared_templates_test")
+@app.route(route="list-shared-templates-test", methods=["GET"])
+def list_shared_templates_test(req: func.HttpRequest) -> func.HttpResponse:
+    # Pas de body en GET, on prend query params
+    prompt = (req.params.get("prompt") or "").strip()
+    if not prompt:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing 'prompt'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    model = os.getenv("AZURE_OPENAI_MODEL")
+    client = _get_aoai_client()
+
+    messages = [{"role": "user", "content": prompt}]
+    if req.params.get("pageSize"):
+        messages.append({"role": "system", "content": f"pageSize={req.params['pageSize']}"})
+
+    tools = [_build_list_shared_templates_tool_def()]
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+        result = {"answer": msg.content}
+
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            result["tool_called"] = {
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+
+            # Appel backend: GET avec query params + clé de fonction
+            base = os.getenv("DOCSVC_BASE_URL").rstrip("/")
+            func_key = os.getenv("DOCSVC_FUNCTION_KEY")
+            backend_url = f"{base}/templates"
+
+            args = {}
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+
+            params = {}
+            if "pageSize" in args and args["pageSize"]:
+                try:
+                    params["pageSize"] = int(args["pageSize"])
+                except Exception:
+                    pass
+            params["code"] = func_key  # auth_level=FUNCTION
+
+            all_items = []
+            next_token = None
+
+            while True:
+                params = {}
+                if "pageSize" in args and args["pageSize"]:
+                    try:
+                        params["pageSize"] = int(args["pageSize"])
+                    except Exception:
+                        pass
+                if next_token:
+                    params["continuationToken"] = next_token
+                params["code"] = func_key  # auth_level=FUNCTION
+
+                r = requests.get(
+                    backend_url,
+                    params=params,
+                    timeout=int(os.getenv("DOCSVC_TIMEOUT_SECONDS", "20")),
+                )
+                data = r.json()
+                all_items.extend(data.get("items", []))
+                next_token = data.get("continuationToken")
+                if not next_token:
+                    break
+
+            backend_data = {"items": all_items}
+
+
+            follow_up = client.chat.completions.create(
+                model=model,
+                messages=messages + [
+                    msg,
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(backend_data),
+                    },
+                ],
+            )
+            result["answer"] = follow_up.choices[0].message.content
+            result["backend_result"] = backend_data
+
+        return func.HttpResponse(
+            json.dumps(result, ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    except Exception as e:
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+
+def _build_convert_word_to_pdf_tool_def():
+    return {
+        "type": "function",
+        "function": {
+            "name": "convert_word_to_pdf",
+            "description": "Convert an existing .docx/.dotx in blob storage to PDF.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "blob": {
+                        "type": "string",
+                        "description": "Blob path of the source .docx/.dotx (e.g., 'user123/new.docx')"
+                    },
+                    "dest": {
+                        "type": "string",
+                        "description": "Optional destination blob path for the PDF"
+                    }
+                },
+                "required": ["blob"]
+            }
+        }
+    }
+
+
+@app.function_name("convert_word_to_pdf_test")
+@app.route(route="convert-word-to-pdf-test", methods=["POST"])
+def convert_word_to_pdf_test(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing 'prompt'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    model = os.getenv("AZURE_OPENAI_MODEL")
+    client = _get_aoai_client()
+
+    # On laisse le modèle déclencher la tool ; on lui file juste les args si fournis
+    messages = [{"role": "user", "content": prompt}]
+    if body.get("blob"):
+        messages.append({"role": "system", "content": f"blob={body['blob']}"})
+    if body.get("dest"):
+        messages.append({"role": "system", "content": f"dest={body['dest']}"})
+
+    tools = [_build_convert_word_to_pdf_tool_def()]
+
+    try:
+        # 1) Appel modèle
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+        result = {"answer": msg.content}
+
+        # 2) Si tool appelée → appel backend réel (POST + query params)
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            result["tool_called"] = {
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+
+            base = os.getenv("DOCSVC_BASE_URL").rstrip("/")
+            func_key = os.getenv("DOCSVC_FUNCTION_KEY")
+            backend_url = f"{base}/convert/word-to-pdf"
+
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+
+            params = {"code": func_key}
+            if "blob" in args and args["blob"]:
+                params["blob"] = args["blob"]
+            if "dest" in args and args["dest"]:
+                params["dest"] = args["dest"]
+
+            r = requests.post(
+                backend_url,
+                params=params,   # le backend lit blob/dest en query
+                timeout=int(os.getenv("DOCSVC_TIMEOUT_SECONDS", "20")),
+            )
+            try:
+                backend_data = r.json()
+            except Exception:
+                backend_data = {"raw": r.text}
+
+            # 3) Boucle de synthèse
+            follow_up = client.chat.completions.create(
+                model=model,
+                messages=messages + [
+                    msg,
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps(backend_data),
+                    },
+                ],
+            )
+            result["answer"] = follow_up.choices[0].message.content
+            result["backend_result"] = backend_data
+
+        return func.HttpResponse(
+            json.dumps(result, ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    except Exception as e:
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+
+def _build_init_user_tool_def():
+    return {
+        "type": "function",
+        "function": {
+            "name": "init_user",
+            "description": "Initialize user folders in blob storage (creates .keep in required subdirs).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {
+                        "type": "string",
+                        "description": "User identifier"
+                    }
+                },
+                "required": ["user_id"]
+            }
+        }
+    }
+
+
+@app.function_name("init_user_test")
+@app.route(route="init-user-test", methods=["POST"])
+def init_user_test(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing 'prompt'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    model = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
+    client = _get_aoai_client()
+
+    messages = [{"role": "user", "content": prompt}]
+    if body.get("user_id"):
+        messages.append({"role": "system", "content": f"user_id={body['user_id']}"})
+
+    tools = [_build_init_user_tool_def()]
+
+    try:
+        # 1) Appel modèle
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+        result = {"answer": msg.content}
+
+        # 2) Si tool appelée → POST backend avec JSON + ?code=
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            result["tool_called"] = {
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+
+            base = os.getenv("DOCSVC_BASE_URL").rstrip("/")
+            func_key = os.getenv("DOCSVC_FUNCTION_KEY")
+            backend_url = f"{base}/users/init?code={func_key}"
+
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+
+            headers = {"Content-Type": "application/json"}
+            r = requests.post(
+                backend_url,
+                json=args,
+                headers=headers,
+                timeout=int(os.getenv("DOCSVC_TIMEOUT_SECONDS", "20")),
+            )
+            try:
+                backend_data = r.json()
+            except Exception:
+                backend_data = {"raw": r.text}
+
+            # 3) Synthèse finale
+            created = backend_data.get("created") or []
+            try:
+                uid = (json.loads(tc.function.arguments or "{}")).get("user_id")
+            except Exception:
+                uid = None
+
+            if not created:
+                result["answer"] = f"L'espace pour '{uid}' est déjà initialisé."
+            else:
+                # Extraire les noms de dossiers (sans .keep)
+                folders = []
+                for ph in created:
+                    parts = str(ph).split("/")
+                    # parts = [user_id, maybe folder, ".keep"]
+                    if len(parts) >= 2 and parts[1] and parts[1] != ".keep":
+                        folders.append(parts[1])
+                folders = sorted(set(folders))
+
+                if folders:
+                    result["answer"] = f"Votre espace '{uid}' a été créé sur le blob. Dossiers : {', '.join(folders)}."
+                else:
+                    # Si tu ne veux rien lister du tout :
+                    result["answer"] = f"Votre espace '{uid}' a été créé sur le blob."
+
+            result["backend_result"] = backend_data
+
+        return func.HttpResponse(
+            json.dumps(result, ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    except Exception as e:
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+
+def _build_mcp_hello_tools():
+    sse = os.getenv("TOOLS_SSE_URL", "").rstrip("/")
+    if not sse:
+        raise RuntimeError("Missing TOOLS_SSE_URL")
+    key = os.getenv("TOOLS_FUNCTIONS_KEY", "")
+    return [{
+        "type": "mcp",
+        "server_label": "func-mcp",
+        "server_url": f"{sse}?code={key}",
+        "allowed_tools": ["hello_mcp"],
+        "require_approval": "never"
+    }]
+
+
+@app.function_name("hello_mcp_test")
+@app.route(route="hello-mcp-test", methods=["POST"])
+def hello_mcp_test(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+    prompt = (body.get("prompt") or "Call hello_mcp").strip()
+    if not prompt:
+        return func.HttpResponse(json.dumps({"error":"Missing 'prompt'"}), status_code=400, mimetype="application/json")
+
+    client = _get_aoai_client()
+    model = os.getenv("AZURE_OPENAI_MODEL")
+
+    try:
+        tools = _build_mcp_hello_tools()
+        resp = client.responses.create(
+            model=model,
+            input=[{"role":"user","content":[{"type":"input_text","text": prompt}]}],
+            tools=tools,
+            tool_choice="auto",
+            text={"format":{"type":"text"}}
+        )
+        answer = getattr(resp, "output_text", "") or ""
+        return func.HttpResponse(json.dumps({"answer": answer}, ensure_ascii=False),
+                                 mimetype="application/json")
+    except Exception as e:
+        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+
+
+def _build_mcp_word_create_tools():
+    sse = os.getenv("TOOLS_SSE_URL", "").rstrip("/")
+    if not sse:
+        raise RuntimeError("Missing TOOLS_SSE_URL")
+    key = os.getenv("TOOLS_FUNCTIONS_KEY", "")
+    return [{
+        "type": "mcp",
+        "server_label": "func-mcp",
+        "server_url": f"{sse}?code={key}",
+        "allowed_tools": ["word_create_document"],
+        "require_approval": "never",
+    }]
+
+@app.function_name("word_create_document_test")
+@app.route(route="word-create-document-test", methods=["POST"])
+def word_create_document_test(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+
+    prompt = (body.get("prompt") or "Create a Word document using word_create_document.").strip()
+
+    # Arguments MCP (tous optionnels sauf user_id si tu veux cibler un dossier)
+    args = {
+        "user_id": body.get("user_id"),
+        "filename": body.get("filename"),
+        "title": body.get("title"),
+        "author": body.get("author"),
+    }
+    # Nettoie les None
+    args = {k: v for k, v in args.items() if v is not None}
+
+    client = _get_aoai_client()
+    model = os.getenv("AZURE_OPENAI_MODEL")
+
+    try:
+        tools = _build_mcp_word_create_tools()
+
+        # Hint minimal pour que le modèle passe bien les arguments fournis
+        msgs = []
+        if args:
+            msgs.append({
+                "role": "system",
+                "content": [{"type": "input_text", "text": f"Call the MCP tool 'word_create_document' with these exact JSON arguments:\n{json.dumps(args)}"}],
+            })
+        msgs.append({
+            "role": "user",
+            "content": [{"type": "input_text", "text": prompt}],
+        })
+
+        resp = client.responses.create(
+            model=model,
+            input=msgs,
+            tools=tools,
+            tool_choice="auto",
+            text={"format": {"type": "text"}}
+        )
+
+        answer = getattr(resp, "output_text", "") or ""
+        return func.HttpResponse(json.dumps({"answer": answer}, ensure_ascii=False), mimetype="application/json")
+
+    except Exception as e:
+        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")

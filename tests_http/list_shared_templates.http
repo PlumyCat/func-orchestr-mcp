@@ -1,0 +1,7 @@
+### Variables
+@host = http://localhost:7071
+
+### list_templates_test
+# @name list_templates_test
+GET {{host}}/api/list-shared-templates-test?prompt=List%20shared%20templates.&pageSize=10
+Accept: application/json

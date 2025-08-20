@@ -1,0 +1,11 @@
+### Variables
+@host = http://localhost:7071
+@user_id = user123
+
+POST {{host}}/api/convert-word-to-pdf-test
+Content-Type: application/json
+
+{
+  "prompt": "Convert this DOCX to PDF.",
+  "blob": "user123/new.docx"
+}

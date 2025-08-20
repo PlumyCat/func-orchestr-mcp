@@ -1,0 +1,15 @@
+### Variables
+@host = http://localhost:7071
+@user_id = user123
+
+### list_templates_test
+# @name list_templates_test
+POST {{host}}/api/list-templates-test
+Accept: application/json
+
+{
+  "prompt": "List my templates.",
+  "user_id": "{{user_id}}",
+  "pageSize": 10,
+  "includeShared": true
+}

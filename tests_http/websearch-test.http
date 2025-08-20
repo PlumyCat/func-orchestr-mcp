@@ -1,0 +1,11 @@
+### Variables
+@host = http://localhost:7071
+
+### websearch-test
+# @name websearch-test
+POST {{host}}/api/websearch-test
+Accept: application/json
+
+{
+  "prompt": "What are the latest updates in Azure Functions pricing for 2024?"
+}

@@ -1,0 +1,10 @@
+### Variables
+@host = http://localhost:7071
+@user_id = user591
+
+### hello_mcp_test
+# @name hello-mcp-test
+POST {{host}}/api/hello-mcp-test
+Accept: application/json
+
+{ "prompt": "Call hello_mcp." }

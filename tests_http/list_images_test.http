@@ -1,0 +1,13 @@
+### Variables
+@host = http://localhost:7071
+@user_id = user123
+
+### api/list-images-test
+# @name api/list-images-test
+POST {{host}}/api/list-images-test
+Accept: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "user_id": "{{user_id}}"
+}
