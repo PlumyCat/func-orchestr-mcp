@@ -491,10 +491,12 @@ def orchestrate_start(req: func.HttpRequest) -> func.HttpResponse:
             user_id = str((orchestration_body.get("user_id") or "").strip())
             conv_raw = str((orchestration_body.get("conversation_id") or "").strip())
             if user_id and (not conv_raw or conv_raw.lower() == "init"):
-                # Use timestamp for conversation_id instead of incremental counter
-                timestamp_id = int(time.time())
-                orchestration_body["conversation_id"] = f"{user_id}_{timestamp_id}"
-                
+                try:
+                    mem_id = cosmos_get_next_memory_id(user_id)
+                except Exception:
+                    mem_id = int(time.time())
+                orchestration_body["conversation_id"] = f"{user_id}_{mem_id}"
+
                 # Update the request blob with the generated conversation_id
                 req_blob.upload_blob(json.dumps(orchestration_body, ensure_ascii=False), overwrite=True)
         except Exception:
@@ -709,10 +711,12 @@ def ask_start(req: func.HttpRequest) -> func.HttpResponse:
             user_id = str((ask_body.get("user_id") or "").strip())
             conv_raw = str((ask_body.get("conversation_id") or "").strip())
             if user_id and (not conv_raw or conv_raw.lower() == "init"):
-                # Use timestamp for conversation_id instead of incremental counter
-                timestamp_id = int(time.time())
-                ask_body["conversation_id"] = f"{user_id}_{timestamp_id}"
-                
+                try:
+                    mem_id = cosmos_get_next_memory_id(user_id)
+                except Exception:
+                    mem_id = int(time.time())
+                ask_body["conversation_id"] = f"{user_id}_{mem_id}"
+
                 # Update the request blob with the generated conversation_id
                 req_blob.upload_blob(json.dumps(ask_body, ensure_ascii=False), overwrite=True)
         except Exception:
