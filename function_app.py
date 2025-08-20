@@ -131,6 +131,59 @@ def list_models(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         return func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
 
+
+# Simple endpoint demonstrating automatic use of the `search_web` tool
+@app.function_name("websearch_test")
+@app.route(route="websearch-test", methods=["POST"])
+def websearch_test(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+    qp = getattr(req, 'params', {}) or {}
+    prompt = (body.get("prompt") or qp.get("prompt") or "").strip()
+    if not prompt:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing 'prompt'"}, ensure_ascii=False),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    # Select a tools-capable model (falling back to AZURE_OPENAI_MODEL)
+    model = os.getenv("ORCHESTRATOR_MODEL_TOOLS") or os.getenv("AZURE_OPENAI_MODEL")
+    if not model:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing ORCHESTRATOR_MODEL_TOOLS or AZURE_OPENAI_MODEL"}, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+    responses_args = build_responses_args(model, prompt, None, "low")
+    tools = responses_args.get("tools") or []
+    responses_args["tools"] = [
+        t
+        for t in tools
+        if (t.get("name") or t.get("function", {}).get("name")) == "search_web"
+    ]
+    if not responses_args["tools"]:
+        return func.HttpResponse(
+            json.dumps({"error": "websearch tool not configured"}, ensure_ascii=False),
+            status_code=500,
+            mimetype="application/json",
+        )
+    responses_args["tool_choice"] = "auto"
+
+    client = _get_aoai_client()
+    output_text, response = run_responses_with_tools(client, responses_args)
+    result = {"answer": output_text}
+    try:
+        used = getattr(response, "_classic_tools_used", None)
+        if used:
+            result["tools_used"] = used
+    except Exception:
+        pass
+    return func.HttpResponse(json.dumps(result, ensure_ascii=False), mimetype="application/json")
+
 # Simple ask http POST function that returns the completion based on prompt
 @app.function_name("ask")
 @app.route(route="ask", methods=["POST"])

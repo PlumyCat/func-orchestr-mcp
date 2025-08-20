@@ -41,28 +41,31 @@ Le projet offre **6 modes d'utilisation** distincts :
 - Pas compatible Copilot Studio (pas de streaming)
 - Usage avancé pour intégrations spécifiques
 
+**4. `POST /api/websearch-test`** - Test simple `search_web`
+- Exemple minimal d'appel avec l'outil `search_web` utilisé automatiquement
+
 ### ⚡ **Endpoints Asynchrones Streaming (Job + Polling)**
 
-**4. `POST /api/ask/start` + `GET /api/ask/status`** - ASK Streaming
+**5. `POST /api/ask/start` + `GET /api/ask/status`** - ASK Streaming
 - Version streaming de `/api/ask`
 - Choix manuel du modèle avec progress en temps réel
 - Messages contextuels : "Génération en cours…", "Utilisation d'outil…"
 
-**5. `POST /api/orchestrate/start` + `GET /api/orchestrate/status`** - ORCHESTRATE Streaming  
+**6. `POST /api/orchestrate/start` + `GET /api/orchestrate/status`** - ORCHESTRATE Streaming
 - Version streaming de `/api/orchestrate`
 - Sélection automatique + reasoning avec progress
 - Compatible **Copilot Studio** (< 30s response + polling)
 - Messages contextuels : "Analyse et sélection du modèle…", "Réflexion approfondie…"
 
-**6. `POST /api/mcp-enqueue` + `GET /api/mcp-result`** - MCP Streaming
+**7. `POST /api/mcp-enqueue` + `GET /api/mcp-result`** - MCP Streaming
 - Outils MCP en streaming
 - Progress détaillé pendant l'exécution des tools
 - Messages spécialisés selon l'outil utilisé
 
 ### 🧠 **Gestion Mémoire Conversations**
 
-**7. `GET /api/mcp-memories`** - Liste des conversations  
-**8. `GET /api/mcp-memory`** - Détail d'une conversation
+**8. `GET /api/mcp-memories`** - Liste des conversations
+**9. `GET /api/mcp-memory`** - Détail d'une conversation
 
 ---
 
