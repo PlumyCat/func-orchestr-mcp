@@ -6,7 +6,6 @@ import uuid
 import requests
 from typing import Optional, List
 import azure.functions as func
-from openai import AzureOpenAI
 from app.services.memory import upsert_memory as cosmos_upsert_memory
 from app.services.memory import list_conversation_docs as cosmos_list_conversation_docs
 from app.services.memory import list_memories as cosmos_list_memories
@@ -19,6 +18,7 @@ from app.services.conversation import (
     build_responses_args,
     run_responses_with_tools,
     build_system_message_text,
+    create_llm_client,
 )
 from app.services.tools import get_builtin_tools_config, execute_tool_call
 
@@ -37,17 +37,6 @@ try:
     app.register_functions(mcp_worker_bp)
 except Exception as e:
     logging.warning(f"MCP worker blueprint not registered: {e}")
-
-
-def _get_aoai_client() -> AzureOpenAI:
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    api_key = os.getenv("AZURE_OPENAI_KEY")
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION")
-    if not endpoint:
-        raise RuntimeError("Missing AZURE_OPENAI_ENDPOINT")
-    if not api_key:
-        raise RuntimeError("Missing AZURE_OPENAI_KEY for local SDK calls")
-    return AzureOpenAI(azure_endpoint=endpoint, api_key=api_key, api_version=api_version)
 
 
 # Health route per template rules
@@ -168,7 +157,7 @@ def websearch_test(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     model = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
-    client = _get_aoai_client()
+    client = create_llm_client()
 
     # Messages
     messages = [{"role": "user", "content": prompt}]
@@ -241,7 +230,7 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         started = time.perf_counter()
-        client = _get_aoai_client()
+        client = create_llm_client()
         # Allow model override via body and query param
         qp = getattr(req, 'params', {}) or {}
         body_model = body.get("model") if isinstance(body, dict) else None
@@ -497,7 +486,7 @@ def orchestrate(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse(json.dumps(decision_payload, ensure_ascii=False), mimetype="application/json")
 
         # Execute using AOAI directly or with tools via Responses API
-        client = _get_aoai_client()
+        client = create_llm_client()
         started = time.perf_counter()
         # Normalize conversation_id
         orig_missing_conversation_id = False
@@ -813,7 +802,7 @@ def list_images_test(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     model = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
-    client = _get_aoai_client()
+    client = create_llm_client()
 
     messages = [{"role": "user", "content": prompt}]
     if body.get("user_id"):
@@ -923,7 +912,7 @@ def list_templates_test(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     model = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
-    client = _get_aoai_client()
+    client = create_llm_client()
 
     messages = [{"role": "user", "content": prompt}]
     if body.get("user_id"):
@@ -1023,7 +1012,7 @@ def list_shared_templates_test(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     model = os.getenv("AZURE_OPENAI_MODEL")
-    client = _get_aoai_client()
+    client = create_llm_client()
 
     messages = [{"role": "user", "content": prompt}]
     if req.params.get("pageSize"):
@@ -1163,7 +1152,7 @@ def convert_word_to_pdf_test(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     model = os.getenv("AZURE_OPENAI_MODEL")
-    client = _get_aoai_client()
+    client = create_llm_client()
 
     # On laisse le modèle déclencher la tool ; on lui file juste les args si fournis
     messages = [{"role": "user", "content": prompt}]
@@ -1283,7 +1272,7 @@ def init_user_test(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     model = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
-    client = _get_aoai_client()
+    client = create_llm_client()
 
     messages = [{"role": "user", "content": prompt}]
     if body.get("user_id"):
@@ -1396,7 +1385,7 @@ def hello_mcp_test(req: func.HttpRequest) -> func.HttpResponse:
     if not prompt:
         return func.HttpResponse(json.dumps({"error":"Missing 'prompt'"}), status_code=400, mimetype="application/json")
 
-    client = _get_aoai_client()
+    client = create_llm_client()
     model = os.getenv("AZURE_OPENAI_MODEL")
 
     try:
@@ -1448,7 +1437,7 @@ def word_create_document_test(req: func.HttpRequest) -> func.HttpResponse:
     # Nettoie les None
     args = {k: v for k, v in args.items() if v is not None}
 
-    client = _get_aoai_client()
+    client = create_llm_client()
     model = os.getenv("AZURE_OPENAI_MODEL")
 
     try:
