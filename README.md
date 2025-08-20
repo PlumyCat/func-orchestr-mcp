@@ -57,7 +57,7 @@ Le projet offre **6 modes d'utilisation** distincts :
 - Compatible **Copilot Studio** (< 30s response + polling)
 - Messages contextuels : "Analyse et sélection du modèle…", "Réflexion approfondie…"
 
-**7. `POST /api/mcp-enqueue` + `GET /api/mcp-result`** - MCP Streaming
+**7. `POST /api/mcp-run`** - MCP Streaming
 - Outils MCP en streaming
 - Progress détaillé pendant l'exécution des tools
 - Messages spécialisés selon l'outil utilisé
@@ -182,7 +182,6 @@ See [`test.http`](test.http) for ready-to-run examples.
   - `POST /api/mcp-run` – run a prompt with optional tools.
   - `POST /api/mcp-enqueue` – enqueue a prompt for background processing.
   - `POST /api/mcp-process` – process a queued job (useful when running locally without a queue trigger).
-  - `GET /api/mcp-result?job_id=<id>` – poll the status or result of a queued job.
   - `GET /api/mcp-memories` and `GET /api/mcp-memory` – query stored memories.
 
 Optional chat endpoints (`PUT|GET|POST /api/chats/{chatId}`) are enabled when the `ENABLE_ASSISTANT_BINDINGS` environment variable is set.
