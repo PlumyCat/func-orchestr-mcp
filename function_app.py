@@ -13,13 +13,20 @@ from app.services.memory import list_memories as cosmos_list_memories
 from app.services.memory import get_conversation_messages as cosmos_get_conversation_messages
 from app.services.memory import upsert_conversation_turn as cosmos_upsert_conversation_turn
 from app.services.memory import get_next_memory_id as cosmos_get_next_memory_id
-from app.services.tools import resolve_mcp_config, build_mcp_tool_config
+from app.services.tools import (
+    resolve_mcp_config,
+    build_mcp_tool_config,
+    normalize_allowed_tools,
+    get_builtin_tools_config,
+    execute_tool_call,
+)
 from app.services.conversation import (
     build_responses_args,
     run_responses_with_tools,
     build_system_message_text,
+    run_with_optional_stream,
 )
-from app.services.tools import get_builtin_tools_config, execute_tool_call
+from app.services.storage import get_storage_clients, get_sidecar_request
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -1413,6 +1420,190 @@ def init_user_test(req: func.HttpRequest) -> func.HttpResponse:
             status_code=500,
             mimetype="application/json",
         )
+
+@app.function_name("mcp_run")
+@app.route(route="mcp-run", methods=["POST"])
+def mcp_run(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return func.HttpResponse(json.dumps({"error": "Missing 'prompt'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
+    model = body.get("model") or os.getenv("AZURE_OPENAI_MODEL")
+    reasoning_effort = (body.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT", "low")).lower()
+    mcp_tool_cfg = resolve_mcp_config(body)
+    responses_args = build_responses_args(model, prompt, mcp_tool_cfg, reasoning_effort)
+    try:
+        normalized_allowed = normalize_allowed_tools(body.get("allowed_tools"))
+        if normalized_allowed is not None and responses_args.get("tools"):
+            filtered = []
+            for t in responses_args["tools"]:
+                name = t.get("name") or t.get("function", {}).get("name")
+                if "*" in normalized_allowed or name in normalized_allowed:
+                    filtered.append(t)
+            if filtered:
+                responses_args["tools"] = filtered
+            else:
+                responses_args.pop("tools", None)
+                responses_args.pop("tool_choice", None)
+    except Exception:
+        pass
+    user_id = str((body.get("user_id") or "").strip())
+    conversation_id_raw = str((body.get("conversation_id") or "").strip())
+    conversation_id = conversation_id_raw or None
+    if conversation_id and conversation_id.lower() == "init":
+        conversation_id = None
+    if user_id and not conversation_id:
+        try:
+            mem_id = cosmos_get_next_memory_id(user_id)
+        except Exception:
+            mem_id = int(time.time())
+        conversation_id = f"{user_id}_{mem_id}"
+    if user_id and conversation_id:
+        try:
+            prior = cosmos_get_conversation_messages(user_id, conversation_id, limit=6)
+            if prior:
+                msgs = []
+                for m in prior[-3:]:
+                    role = (m.get("role") or "user").strip()
+                    content = (m.get("content") or "").strip()
+                    if not content:
+                        continue
+                    if role == "assistant":
+                        msgs.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
+                    else:
+                        msgs.append({"role": "user", "content": [{"type": "input_text", "text": content}]})
+                current = responses_args.get("input", [])
+                system_messages = [msg for msg in current if msg.get("role") == "system"]
+                user_messages = [msg for msg in current if msg.get("role") == "user"]
+                responses_args["input"] = system_messages + msgs + user_messages
+        except Exception:
+            pass
+        responses_args["x_user_id"] = user_id
+    client = _get_aoai_client()
+    if responses_args.get("tools"):
+        tool_context = {"user_id": user_id} if user_id else None
+        output_text, response = run_responses_with_tools(client, responses_args, tool_context=tool_context)
+    else:
+        response = client.responses.create(**responses_args)
+        output_text = getattr(response, "output_text", None) or ""
+    try:
+        if user_id and conversation_id and output_text:
+            cosmos_upsert_conversation_turn(user_id, conversation_id, prompt, output_text)
+    except Exception:
+        pass
+    payload = {"output_text": output_text, "model": model}
+    if user_id:
+        payload["user_id"] = user_id
+        payload["conversation_id"] = conversation_id
+    try:
+        used = getattr(response, "_classic_tools_used", None)
+        if used:
+            payload["tool_used"] = used
+    except Exception:
+        pass
+    return func.HttpResponse(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
+
+
+@app.function_name("mcp_process")
+@app.route(route="mcp-process", methods=["POST"])
+def mcp_process(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+    job_id = str((body.get("job_id") or "").strip())
+    if job_id and not body.get("prompt"):
+        try:
+            storage = get_storage_clients()
+            sidecar = get_sidecar_request(storage["blob"], storage["container"], job_id)
+            if sidecar:
+                body = sidecar
+            else:
+                return func.HttpResponse(json.dumps({"error": "Unknown job_id"}, ensure_ascii=False), status_code=404, mimetype="application/json")
+        except Exception:
+            return func.HttpResponse(json.dumps({"error": "Failed to load job"}, ensure_ascii=False), status_code=500, mimetype="application/json")
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return func.HttpResponse(json.dumps({"error": "Missing 'prompt'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
+    model = body.get("model") or os.getenv("AZURE_OPENAI_MODEL")
+    reasoning_effort = (body.get("reasoning_effort") or os.getenv("DEFAULT_REASONING_EFFORT", "low")).lower()
+    mcp_tool_cfg = resolve_mcp_config(body)
+    responses_args = build_responses_args(model, prompt, mcp_tool_cfg, reasoning_effort)
+    try:
+        normalized_allowed = normalize_allowed_tools(body.get("allowed_tools"))
+        if normalized_allowed is not None and responses_args.get("tools"):
+            filtered = []
+            for t in responses_args["tools"]:
+                name = t.get("name") or t.get("function", {}).get("name")
+                if "*" in normalized_allowed or name in normalized_allowed:
+                    filtered.append(t)
+            if filtered:
+                responses_args["tools"] = filtered
+            else:
+                responses_args.pop("tools", None)
+                responses_args.pop("tool_choice", None)
+    except Exception:
+        pass
+    user_id = str((body.get("user_id") or "").strip())
+    conversation_id_raw = str((body.get("conversation_id") or "").strip())
+    conversation_id = conversation_id_raw or None
+    if conversation_id and conversation_id.lower() == "init":
+        conversation_id = None
+    if user_id and not conversation_id:
+        try:
+            mem_id = cosmos_get_next_memory_id(user_id)
+        except Exception:
+            mem_id = int(time.time())
+        conversation_id = f"{user_id}_{mem_id}"
+    if user_id and conversation_id:
+        try:
+            prior = cosmos_get_conversation_messages(user_id, conversation_id, limit=6)
+            if prior:
+                msgs = []
+                for m in prior[-3:]:
+                    role = (m.get("role") or "user").strip()
+                    content = (m.get("content") or "").strip()
+                    if not content:
+                        continue
+                    if role == "assistant":
+                        msgs.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
+                    else:
+                        msgs.append({"role": "user", "content": [{"type": "input_text", "text": content}]})
+                current = responses_args.get("input", [])
+                system_messages = [msg for msg in current if msg.get("role") == "system"]
+                user_messages = [msg for msg in current if msg.get("role") == "user"]
+                responses_args["input"] = system_messages + msgs + user_messages
+        except Exception:
+            pass
+        responses_args["x_user_id"] = user_id
+    stream = str((body.get("stream") or "false")).lower() in ("1", "true", "yes", "on")
+    client = _get_aoai_client()
+    if responses_args.get("tools"):
+        tool_context = {"user_id": user_id} if user_id else None
+        output_text, response = run_responses_with_tools(client, responses_args, tool_context=tool_context)
+    else:
+        output_text, response = run_with_optional_stream(client, responses_args, stream=stream)
+    try:
+        if user_id and conversation_id and output_text:
+            cosmos_upsert_conversation_turn(user_id, conversation_id, prompt, output_text)
+    except Exception:
+        pass
+    payload = {"output_text": output_text or "", "model": model}
+    if job_id:
+        payload["job_id"] = job_id
+    if user_id:
+        payload["user_id"] = user_id
+        payload["conversation_id"] = conversation_id
+    try:
+        used = getattr(response, "_classic_tools_used", None)
+        if used:
+            payload["tool_used"] = used
+    except Exception:
+        pass
+    return func.HttpResponse(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
 
 
 def _build_mcp_hello_tools():
