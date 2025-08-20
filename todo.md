@@ -5,7 +5,7 @@
 ### search_web
 websearch_test: [POST] http://localhost:7071/api/websearch-test
 
-[text](tests_http/websearch-test.http)
+tests_http/websearch-test.http
 
 ##### Test d'envoi
 @host = http://localhost:7071
@@ -31,7 +31,7 @@ Accept: application/json
 ### init_user
 init_user_test: [POST] http://localhost:7071/api/init-user-test
 
-[text](tests_http/init_user_test.http)
+tests_http/init_user_test.http
 
 ##### Test d'envoi
 @host = http://localhost:7071
@@ -63,7 +63,7 @@ Accept: application/json
 ### convert_word_to_pdf
 word_create_document_test: [POST] http://localhost:7071/api/word-create-document-test
 
-[text](tests_http/convert_word_to_pdf_test.http)
+tests_http/convert_word_to_pdf_test.http
 
 
 ##### Test d'envoi
@@ -100,7 +100,7 @@ Content-Type: application/json
 ### list_images
 list_images_test: [POST] http://localhost:7071/api/list-images-test
 
-[text](tests_http/list_images_test.http)
+tests_http/list_images_test.http
 
 ##### Test d'envoi
 @host = http://localhost:7071
@@ -144,7 +144,7 @@ Accept: application/json
 ### list_templates_user
 list_templates_test: [POST] http://localhost:7071/api/list-templates-test
 
-[text](tests_http/list_templates_user_test.http)
+tests_http/list_templates_user_test.http
 
 ##### Test d'envoi
 @host = http://localhost:7071
@@ -184,7 +184,7 @@ Accept: application/json
 ### list_shared_templates
 list_shared_templates_test: [GET] http://localhost:7071/api/list-shared-templates-test
 
-[text](tests_http/list_shared_templates.http)
+tests_http/list_shared_templates.http
 
 ##### Test d'envoi
 @host = http://localhost:7071
@@ -482,7 +482,7 @@ Accept: application/json
 ### hello_mcp
 hello_mcp_test: [POST] http://localhost:7071/api/hello-mcp-test
 
-[text](tests_http/hello_mcp_test.http)
+tests_http/hello_mcp_test.http
 
 ##### Test d'envoi
 @host = http://localhost:7071
@@ -504,7 +504,7 @@ Accept: application/json
 ### word-create-document
 convert_word_to_pdf_test: [POST] http://localhost:7071/api/convert-word-to-pdf-test
 
-[text](<tests_http/word_create_document_test copy.http>)
+tests_http/word_create_document_test.http
 
 ##### Test d'envoi
 @host = http://localhost:7071
@@ -585,6 +585,6 @@ ne pas toucher laisser tel quel
 
 ## consignes 
 
-Tous les endpoints au-dessus doievnt aussi être enregistrer sur cosmos db pour suivi/reprise des conversation, le principe est que si dans la requête il y a "user_id": = on enregistre sur Cosmosdb, si "conversation_id": "init" ou pas de "conversation_id": = nouvelle conversation, si exemple "conversation_id": "user123_1755704653" on reprends le conversation pour ça normalement [text](app/services/memory.py) est ok mais a vérifier 
+Tous les endpoints au-dessus doievnt aussi être enregistrer sur cosmos db pour suivi/reprise des conversation, le principe est que si dans la requête il y a "user_id": = on enregistre sur Cosmosdb, si "conversation_id": "init" ou pas de "conversation_id": = nouvelle conversation, si exemple "conversation_id": "user123_1755704653" on reprends le conversation pour ça normalement app/services/memory.py est ok mais a vérifier 
 
-Tous ce qui est dans [text](app/services/conversation.py), [text](app/services/memory.py), [text](app/services/storage.py), [text](app/services/storage.py), [text](app/services/tools.py) est a remettre en question du grand n'importe quoi 
+Tous ce qui est dans app/services/conversation.py, app/services/memory.py, app/services/storage.py, app/services/storage.py, app/services/tools.py est a remettre en question du grand n'importe quoi 
