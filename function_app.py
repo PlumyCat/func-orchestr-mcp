@@ -13,7 +13,7 @@ from app.services.memory import list_memories as cosmos_list_memories
 from app.services.memory import get_conversation_messages as cosmos_get_conversation_messages
 from app.services.memory import upsert_conversation_turn as cosmos_upsert_conversation_turn
 from app.services.memory import get_next_memory_id as cosmos_get_next_memory_id
-from app.services.tools import resolve_mcp_config
+from app.services.tools import resolve_mcp_config, build_mcp_tool_config
 from app.services.conversation import (
     build_responses_args,
     run_responses_with_tools,
@@ -1416,17 +1416,7 @@ def init_user_test(req: func.HttpRequest) -> func.HttpResponse:
 
 
 def _build_mcp_hello_tools():
-    sse = os.getenv("TOOLS_SSE_URL", "").rstrip("/")
-    if not sse:
-        raise RuntimeError("Missing TOOLS_SSE_URL")
-    key = os.getenv("TOOLS_FUNCTIONS_KEY", "")
-    return [{
-        "type": "mcp",
-        "server_label": "func-mcp",
-        "server_url": f"{sse}?code={key}",
-        "allowed_tools": ["hello_mcp"],
-        "require_approval": "never"
-    }]
+    return [build_mcp_tool_config("hello_mcp")]
 
 
 @app.function_name("hello_mcp_test")
@@ -1460,17 +1450,7 @@ def hello_mcp_test(req: func.HttpRequest) -> func.HttpResponse:
 
 
 def _build_mcp_word_create_tools():
-    sse = os.getenv("TOOLS_SSE_URL", "").rstrip("/")
-    if not sse:
-        raise RuntimeError("Missing TOOLS_SSE_URL")
-    key = os.getenv("TOOLS_FUNCTIONS_KEY", "")
-    return [{
-        "type": "mcp",
-        "server_label": "func-mcp",
-        "server_url": f"{sse}?code={key}",
-        "allowed_tools": ["word_create_document"],
-        "require_approval": "never",
-    }]
+    return [build_mcp_tool_config("word_create_document")]
 
 @app.function_name("word_create_document_test")
 @app.route(route="word-create-document-test", methods=["POST"])
@@ -1523,3 +1503,65 @@ def word_create_document_test(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+
+
+@app.function_name("mcp_tool_test")
+@app.route(route="mcp-tool-test", methods=["POST"])
+def mcp_tool_test(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        body = req.get_json()
+    except Exception:
+        body = {}
+
+    tool_name = (body.get("tool") or "").strip()
+    if not tool_name:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing 'tool'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    prompt = (body.get("prompt") or f"Call the MCP tool '{tool_name}'.").strip()
+    args = body.get("args") if isinstance(body.get("args"), dict) else {}
+
+    client = _get_aoai_client()
+    model = os.getenv("AZURE_OPENAI_MODEL")
+
+    try:
+        tool_cfg = build_mcp_tool_config(tool_name)
+        msgs = []
+        if args:
+            msgs.append({
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": f"Call the MCP tool '{tool_name}' with these exact JSON arguments:\n{json.dumps(args)}",
+                    }
+                ],
+            })
+        msgs.append({
+            "role": "user",
+            "content": [{"type": "input_text", "text": prompt}],
+        })
+
+        resp = client.responses.create(
+            model=model,
+            input=msgs,
+            tools=[tool_cfg],
+            tool_choice="auto",
+            text={"format": {"type": "text"}},
+        )
+
+        answer = getattr(resp, "output_text", "") or ""
+        return func.HttpResponse(
+            json.dumps({"answer": answer}, ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    except Exception as e:
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )

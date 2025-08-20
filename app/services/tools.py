@@ -101,6 +101,35 @@ def resolve_mcp_config(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return tool_cfg
 
 
+def build_mcp_tool_config(tool_name: str, require_approval: str = "never") -> Dict[str, Any]:
+    """Build a minimal MCP tool configuration for a single tool.
+
+    This helper uses ``resolve_mcp_config`` with the provided tool name and
+    environment variables (``TOOLS_SSE_URL``, ``TOOLS_FUNCTIONS_KEY``) to
+    construct the configuration dictionary expected by the Responses API.
+
+    Parameters
+    ----------
+    tool_name: str
+        Name of the MCP tool to allow.
+    require_approval: str
+        MCP approval requirement (``never`` | ``initial`` | ``always``).
+
+    Returns
+    -------
+    Dict[str, Any]
+        Configuration object describing the single MCP tool.
+    """
+
+    cfg = resolve_mcp_config({
+        "allowed_tools": [tool_name],
+        "require_approval": require_approval,
+    })
+    if not cfg:
+        raise RuntimeError("Missing MCP SSE URL. Configure TOOLS_SSE_URL.")
+    return cfg
+
+
 # --- Built-in classic tools (non-MCP) ---------------------------------------------------------
 
 def _websearch_env() -> Tuple[Optional[str], Optional[str]]:

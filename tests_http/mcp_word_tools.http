@@ -1,0 +1,389 @@
+### Variables
+@host = http://localhost:7071
+@user_id = user123
+
+### word_add_comment
+# @name word_add_comment
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_add_comment",
+  "prompt": "Invoke word_add_comment.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_add_heading
+# @name word_add_heading
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_add_heading",
+  "prompt": "Invoke word_add_heading.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_add_page_break
+# @name word_add_page_break
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_add_page_break",
+  "prompt": "Invoke word_add_page_break.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_add_paragraph
+# @name word_add_paragraph
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_add_paragraph",
+  "prompt": "Invoke word_add_paragraph.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_add_picture
+# @name word_add_picture
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_add_picture",
+  "prompt": "Invoke word_add_picture.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_add_table
+# @name word_add_table
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_add_table",
+  "prompt": "Invoke word_add_table.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_apply_table_alternating_rows
+# @name word_apply_table_alternating_rows
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_apply_table_alternating_rows",
+  "prompt": "Invoke word_apply_table_alternating_rows.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_auto_fit_table_columns
+# @name word_auto_fit_table_columns
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_auto_fit_table_columns",
+  "prompt": "Invoke word_auto_fit_table_columns.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_copy_document
+# @name word_copy_document
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_copy_document",
+  "prompt": "Invoke word_copy_document.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_create_custom_style
+# @name word_create_custom_style
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_create_custom_style",
+  "prompt": "Invoke word_create_custom_style.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_delete_paragraph
+# @name word_delete_paragraph
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_delete_paragraph",
+  "prompt": "Invoke word_delete_paragraph.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_find_text
+# @name word_find_text
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_find_text",
+  "prompt": "Invoke word_find_text.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_format_table
+# @name word_format_table
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_format_table",
+  "prompt": "Invoke word_format_table.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_format_table_cell_text
+# @name word_format_table_cell_text
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_format_table_cell_text",
+  "prompt": "Invoke word_format_table_cell_text.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_format_text
+# @name word_format_text
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_format_text",
+  "prompt": "Invoke word_format_text.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_get_all_comments
+# @name word_get_all_comments
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_get_all_comments",
+  "prompt": "Invoke word_get_all_comments.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_get_comments_by_author
+# @name word_get_comments_by_author
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_get_comments_by_author",
+  "prompt": "Invoke word_get_comments_by_author.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_get_comments_for_paragraph
+# @name word_get_comments_for_paragraph
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_get_comments_for_paragraph",
+  "prompt": "Invoke word_get_comments_for_paragraph.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_get_document_info
+# @name word_get_document_info
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_get_document_info",
+  "prompt": "Invoke word_get_document_info.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_get_document_outline
+# @name word_get_document_outline
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_get_document_outline",
+  "prompt": "Invoke word_get_document_outline.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_get_paragraph_text
+# @name word_get_paragraph_text
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_get_paragraph_text",
+  "prompt": "Invoke word_get_paragraph_text.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_get_text
+# @name word_get_text
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_get_text",
+  "prompt": "Invoke word_get_text.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_highlight_table_header
+# @name word_highlight_table_header
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_highlight_table_header",
+  "prompt": "Invoke word_highlight_table_header.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_list_documents
+# @name word_list_documents
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_list_documents",
+  "prompt": "Invoke word_list_documents.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_list_templates
+# @name word_list_templates
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_list_templates",
+  "prompt": "Invoke word_list_templates.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_merge_table_cells
+# @name word_merge_table_cells
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_merge_table_cells",
+  "prompt": "Invoke word_merge_table_cells.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_merge_table_cells_horizontal
+# @name word_merge_table_cells_horizontal
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_merge_table_cells_horizontal",
+  "prompt": "Invoke word_merge_table_cells_horizontal.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_merge_table_cells_vertical
+# @name word_merge_table_cells_vertical
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_merge_table_cells_vertical",
+  "prompt": "Invoke word_merge_table_cells_vertical.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_search_and_replace
+# @name word_search_and_replace
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_search_and_replace",
+  "prompt": "Invoke word_search_and_replace.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_set_table_alignment_all
+# @name word_set_table_alignment_all
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_set_table_alignment_all",
+  "prompt": "Invoke word_set_table_alignment_all.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_set_table_cell_alignment
+# @name word_set_table_cell_alignment
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_set_table_cell_alignment",
+  "prompt": "Invoke word_set_table_cell_alignment.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_set_table_cell_padding
+# @name word_set_table_cell_padding
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_set_table_cell_padding",
+  "prompt": "Invoke word_set_table_cell_padding.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_set_table_cell_shading
+# @name word_set_table_cell_shading
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_set_table_cell_shading",
+  "prompt": "Invoke word_set_table_cell_shading.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_set_table_column_width
+# @name word_set_table_column_width
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_set_table_column_width",
+  "prompt": "Invoke word_set_table_column_width.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
+### word_set_table_width
+# @name word_set_table_width
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_set_table_width",
+  "prompt": "Invoke word_set_table_width.",
+  "args": { "user_id": "{{user_id}}" }
+}
+
