@@ -159,59 +159,6 @@ def _get_storage_clients(queue_name: str = QUEUE_NAME) -> Dict[str, Any]:
     }
 
 
-    try:
-        if req.method == "OPTIONS":
-            return _preflight_response(req)
-        job_id = req.params.get("job_id")
-        if not job_id:
-            resp = func.HttpResponse(json.dumps({"error": "Missing 'job_id'"}, ensure_ascii=False), status_code=400, mimetype="application/json")
-            return _apply_cors(resp, req)
-
-        storage = _get_storage_clients()
-        blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
-        if not blob_client.exists():
-            resp = func.HttpResponse(json.dumps({"job_id": job_id, "status": "unknown"}, ensure_ascii=False), mimetype="application/json", status_code=404)
-            return _apply_cors(resp, req)
-
-        content = json.loads(blob_client.download_blob().readall().decode("utf-8"))
-
-        status = str(content.get("status", "")).lower()
-        if status in ("queued", "running"):
-            delay = _get_result_delay_seconds()
-            content.setdefault("recommended_poll_interval_ms", _get_recommended_poll_interval_ms())
-            time.sleep(delay)
-
-        qp = getattr(req, 'params', {}) or {}
-        return_partial = str(qp.get("return_partial_output", "")).lower() in ("1", "true", "yes", "on")
-        if status == "running":
-            if return_partial:
-                # Support both old and new field names for compatibility
-                partial_content = content.get("partial_text") or content.get("partial_output") 
-                if partial_content and not content.get("output_text"):
-                    content["output_text"] = partial_content
-            else:
-                # Remove partial output fields
-                content.pop("partial_output", None)
-                content.pop("partial_text", None)
-
-        if status == "running" and not content.get("output_text"):
-            content.setdefault("output_text", "⏳ Thought process ...")
-            
-        # Map final_text to output_text for completed jobs if output_text is missing
-        if status in ("completed", "done") and content.get("final_text") and not content.get("output_text"):
-            content["output_text"] = content["final_text"]
-
-        response_payload = {"job_id": job_id, **content}
-        resp = func.HttpResponse(json.dumps(response_payload, ensure_ascii=False), mimetype="application/json")
-        if "recommended_poll_interval_ms" in content:
-            resp.headers["Retry-After"] = str(max(1, int(content["recommended_poll_interval_ms"] / 1000)))
-        return _apply_cors(resp, req)
-    except Exception as e:
-        logging.exception("Error in /api/mcp-result")
-        resp = func.HttpResponse(json.dumps({"error": str(e)}, ensure_ascii=False), status_code=500, mimetype="application/json")
-        return _apply_cors(resp, req)
-
-
 @bp.queue_trigger(arg_name="msg", queue_name=QUEUE_NAME, connection="AzureWebJobsStorage")
 def queue_trigger(msg: func.QueueMessage) -> None:
     try:
