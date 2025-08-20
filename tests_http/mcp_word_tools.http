@@ -112,6 +112,20 @@ Content-Type: application/json
   "args": { "user_id": "{{user_id}}" }
 }
 
+### word_create_document
+# @name word_create_document
+POST {{host}}/api/mcp-tool-test
+Content-Type: application/json
+
+{
+  "tool": "word_create_document",
+  "prompt": "Invoke word_create_document.",
+  "args": {
+    "user_id": "{{user_id}}",
+    "filename": "mcp_test.docx"
+  }
+}
+
 ### word_delete_paragraph
 # @name word_delete_paragraph
 POST {{host}}/api/mcp-tool-test
