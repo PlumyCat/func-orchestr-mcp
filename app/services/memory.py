@@ -75,47 +75,38 @@ def _sanitize_container_name(raw_user_id: str) -> str:
 
 
 def _sanitize_text_for_cosmos(raw: str) -> str:
-    r"""Sanitize text to avoid Cosmos JSON parser errors like 'unsupported Unicode escape sequence'.
+    r"""Return a string safe for Cosmos JSON parsing.
 
-    - Remove any surrogate code points (U+D800..U+DFFF)
-    - Neutralize common escape-like sequences (``\u``, ``\U``, ``\x``)
-    - Escape any stray backslashes not followed by a valid JSON escape char
-    - Ensure the string is valid UTF-8 by replacing undecodable bytes
+    The goal is only to avoid parser errors such as ``Unsupported Unicode escape sequence``.
+    We therefore:
+
+    - Drop any isolated surrogate code points (U+D800..U+DFFF)
+    - Double the backslash for malformed ``\\u``/``\\U``/``\\x`` escape prefixes
+      so they survive as literal text
     """
     try:
         text = str(raw or "")
     except Exception:
         return ""
+
+    # Remove surrogate code points which cannot appear in valid UTF-8
     try:
-        # Remove surrogate code points
         text = "".join(ch for ch in text if not (0xD800 <= ord(ch) <= 0xDFFF))
     except Exception:
         pass
+
+    # Neutralise malformed escape prefixes by doubling the backslash
     try:
-        # Retrait inconditionnel du symbole degré (demande utilisateur) sans variable d'env supplémentaire
-        if "°" in text:
-            text = text.replace("°", "")
+        patterns = [
+            r"\\u(?![0-9a-fA-F]{4})",
+            r"\\x(?![0-9a-fA-F]{2})",
+            r"\\U(?![0-9a-fA-F]{8})",
+        ]
+        for pat in patterns:
+            text = re.sub(pat, lambda m: "\\\\" + m.group(0), text)
     except Exception:
         pass
-    try:
-        # Cosmos rejects strings with unrecognized escape sequences, returning
-        # "Unsupported Unicode escape sequence". Double the backslash for
-        # potential escape patterns so the literal text is stored.
-        text = (
-            text.replace("\\u", "\\\\u")
-                .replace("\\U", "\\\\U")
-                .replace("\\x", "\\\\x")
-        )
-        # Escape any remaining backslash not followed by a valid JSON escape char
-        text = re.sub(r"\\(?![\"\\/bfnrtuU])", r"\\\\", text)
-    except Exception:
-        pass
-    try:
-        # Force to valid UTF-8; replace invalid sequences
-        text = text.encode(
-            "utf-8", errors="replace").decode("utf-8", errors="replace")
-    except Exception:
-        pass
+
     return text
 
 
@@ -168,66 +159,18 @@ def _scan_invalid_escape_sequences(value: Any, path: str = "$") -> List[str]:
 
 
 def _final_cosmos_scrub(doc: Dict[str, Any]) -> Dict[str, Any]:
-    r"""Final defensive scrub before sending to Cosmos.
+    r"""Minimal defensive scrub before sending to Cosmos.
 
-    Steps:
-    1. Recursive sanitization of all strings
-    2. Serialize to JSON and neutralize any remaining raw ``\u`` sequences
-       that aren't followed by 4 hex digits (source of Cosmos 'unsupported Unicode escape sequence').
-    3. Re-load into a dict to hand a clean structure to the SDK.
+    We recursively sanitise all strings and ensure the resulting document can be
+    serialised to JSON.  No additional transformations are performed.
     """
     try:
-        def _neutralize_invalid_unicode_escapes_string(s: str) -> str:
-            r"""Replace any invalid / short / malformed "\\u" style escape with a literal sequence.
-
-                        Patterns handled (single backslash forms only):
-                            - \u (nothing after)
-                            - \u<1-3 hex>
-                            - \u<non-hex>
-                        We convert them to a double-backslash form so Cosmos JSON parser treats them as plain text.
-                        We are careful to NOT touch already double escaped patterns (\\uXXXX) so we do a negative lookbehind.
-                        """
-            try:
-                # Replace \u not followed by 4 hex digits
-                s = re.sub(r"(?<!\\)\\u(?![0-9a-fA-F]{4})", r"\\\\u", s)
-                # Also catch partial hex sequences (1-3 hex digits then non-hex boundary)
-                s = re.sub(
-                    r"(?<!\\)\\u([0-9a-fA-F]{1,3})(?=\b|[^0-9a-fA-F])", lambda m: "\\\\u" + m.group(1), s)
-            except Exception:
-                pass
-            return s
-
-        def _neutralize_walk(value: Any) -> Any:
-            if isinstance(value, str):
-                return _neutralize_invalid_unicode_escapes_string(value)
-            if isinstance(value, list):
-                return [_neutralize_walk(v) for v in value]
-            if isinstance(value, dict):
-                return {k: _neutralize_walk(v) for k, v in value.items()}
-            return value
-
-        # First general sanitization
         sanitized = _sanitize_json_for_cosmos(doc)
-        # Targeted neutralization pass
-        sanitized = _neutralize_walk(sanitized)
-
         try:
             raw_json = json.dumps(sanitized, ensure_ascii=False)
-        except Exception:
-            raw_json = json.dumps(sanitized, ensure_ascii=True)
-
-        raw_json = re.sub(
-                r"(?<!\\)(\\u[0-9a-fA-F]{4})", r"\\\\\\1", raw_json)
-
-        try:
             return json.loads(raw_json)
         except Exception:
-            # Last resort: escape every single backslash then parse
-            try:
-                aggressive = raw_json.replace("\\", "\\\\")
-                return json.loads(aggressive)
-            except Exception:
-                return sanitized
+            return sanitized
     except Exception:
         return doc
 
