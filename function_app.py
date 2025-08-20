@@ -1676,64 +1676,64 @@ def word_create_document_test(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
 
+if os.getenv("ENABLE_MCP_TOOL_TEST", "").lower() in ("1", "true", "yes"):
+    @app.function_name("mcp_tool_test")
+    @app.route(route="mcp-tool-test", methods=["POST"])
+    def mcp_tool_test(req: func.HttpRequest) -> func.HttpResponse:
+        try:
+            body = req.get_json()
+        except Exception:
+            body = {}
 
-@app.function_name("mcp_tool_test")
-@app.route(route="mcp-tool-test", methods=["POST"])
-def mcp_tool_test(req: func.HttpRequest) -> func.HttpResponse:
-    try:
-        body = req.get_json()
-    except Exception:
-        body = {}
+        tool_name = (body.get("tool") or "").strip()
+        if not tool_name:
+            return func.HttpResponse(
+                json.dumps({"error": "Missing 'tool'"}),
+                status_code=400,
+                mimetype="application/json",
+            )
 
-    tool_name = (body.get("tool") or "").strip()
-    if not tool_name:
-        return func.HttpResponse(
-            json.dumps({"error": "Missing 'tool'"}),
-            status_code=400,
-            mimetype="application/json",
-        )
+        prompt = (body.get("prompt") or f"Call the MCP tool '{tool_name}'.").strip()
+        args = body.get("args") if isinstance(body.get("args"), dict) else {}
 
-    prompt = (body.get("prompt") or f"Call the MCP tool '{tool_name}'.").strip()
-    args = body.get("args") if isinstance(body.get("args"), dict) else {}
+        client = _get_aoai_client()
+        model = os.getenv("AZURE_OPENAI_MODEL")
 
-    client = _get_aoai_client()
-    model = os.getenv("AZURE_OPENAI_MODEL")
-
-    try:
-        tool_cfg = build_mcp_tool_config(tool_name)
-        msgs = []
-        if args:
+        try:
+            tool_cfg = build_mcp_tool_config(tool_name)
+            msgs = []
+            if args:
+                msgs.append({
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"Call the MCP tool '{tool_name}' with these exact JSON arguments:\n{json.dumps(args)}",
+                        }
+                    ],
+                })
             msgs.append({
-                "role": "system",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": f"Call the MCP tool '{tool_name}' with these exact JSON arguments:\n{json.dumps(args)}",
-                    }
-                ],
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}],
             })
-        msgs.append({
-            "role": "user",
-            "content": [{"type": "input_text", "text": prompt}],
-        })
 
-        resp = client.responses.create(
-            model=model,
-            input=msgs,
-            tools=[tool_cfg],
-            tool_choice="auto",
-            text={"format": {"type": "text"}},
-        )
+            resp = client.responses.create(
+                model=model,
+                input=msgs,
+                tools=[tool_cfg],
+                tool_choice="auto",
+                text={"format": {"type": "text"}},
+            )
 
-        answer = getattr(resp, "output_text", "") or ""
-        return func.HttpResponse(
-            json.dumps({"answer": answer}, ensure_ascii=False),
-            mimetype="application/json",
-        )
+            answer = getattr(resp, "output_text", "") or ""
+            return func.HttpResponse(
+                json.dumps({"answer": answer}, ensure_ascii=False),
+                mimetype="application/json",
+            )
 
-    except Exception as e:
-        return func.HttpResponse(
-            json.dumps({"error": str(e)}),
-            status_code=500,
-            mimetype="application/json",
-        )
+        except Exception as e:
+            return func.HttpResponse(
+                json.dumps({"error": str(e)}),
+                status_code=500,
+                mimetype="application/json",
+            )

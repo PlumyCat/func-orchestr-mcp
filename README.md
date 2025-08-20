@@ -178,7 +178,7 @@ See [`test.http`](test.http) for ready-to-run examples.
 
 - `GET /api/ping` – health check.
 - `POST /api/ask` – send a prompt and receive a completion. Supports optional `user_id` and `conversation_id` for memory. Use `"conversation_id": "init"` to start a new thread explicitly.
-- `POST /api/mcp-tool-test` – invoke any MCP Word tool by name (testing helper). See `tests_http/mcp_word_tools.http`.
+- `POST /api/mcp-tool-test` – invoke any MCP Word tool by name (testing helper). Requires `ENABLE_MCP_TOOL_TEST=1`. See `tests_http/mcp_word_tools.http`.
 - MCP endpoints:
   - `POST /api/mcp-run` – run a prompt with optional tools.
   - `POST /api/mcp-enqueue` – enqueue a prompt for background processing.
