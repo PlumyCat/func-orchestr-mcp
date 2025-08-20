@@ -254,13 +254,15 @@ def ask(req: func.HttpRequest) -> func.HttpResponse:
         logging.debug(f"ask: body_model={body_model} qp_model={qp.get('model') if qp else None}")
         qp_model = qp.get("model") if qp else None
         base_default = (os.getenv("AZURE_OPENAI_MODEL"))
-        model = (body_model or qp_model, base_default) or base_default
+        model = (body_model or qp_model) or base_default
         # If classic tools are available and caller did not force a model, prefer the tools-capable model
         try:
             if not body_model and not qp_model and len(get_builtin_tools_config()) > 0:
-                model = (os.getenv("ORCHESTRATOR_MODEL_TOOLS"), model) or model
+                model = (os.getenv("ORCHESTRATOR_MODEL_TOOLS") or model)
         except Exception:
             pass
+        if not isinstance(model, str):
+            model = base_default or ""
         # Conversation: only when user_id provided
         user_id = (body.get("user_id") if isinstance(body, dict) else None) or (qp.get("user_id") or "")
         user_id = str(user_id).strip()
