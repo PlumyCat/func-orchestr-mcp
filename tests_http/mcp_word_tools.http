@@ -2,6 +2,8 @@
 @host = http://localhost:7071
 @user_id = user123
 
+### Requires env var ENABLE_MCP_TOOL_TEST=1
+
 ### word_add_comment
 # @name word_add_comment
 POST {{host}}/api/mcp-tool-test
