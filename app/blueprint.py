@@ -821,9 +821,8 @@ def ask_status(req: func.HttpRequest) -> func.HttpResponse:
             if content.get("mode") == "ask":
                 message = content.get("message", "Réflexion en cours…")
         
-        # Add 5 second delay for status polling to limit API calls
-        if mapped_status in ("queued", "running", "tool"):
-            time.sleep(5)
+        # Clients may poll rapidly; rely on Retry-After header instead of server-side sleeps
+        # to advise on backoff intervals.
 
         # Try to get conversation_id from request blob
         conversation_id = ""
