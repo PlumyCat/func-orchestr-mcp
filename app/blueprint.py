@@ -11,19 +11,15 @@ import azure.functions as func
 from .services.storage import get_storage_clients
 from .services.tools import resolve_mcp_config, normalize_allowed_tools
 
-from .services.tools import execute_tool_call
 from .services.conversation import (
     create_llm_client,
     build_responses_args,
-    run_with_optional_stream,
     run_responses_with_tools,
     build_system_message_text,
 )
-from .services.tools import get_builtin_tools_config
 from .services.memory import (
     list_memories as cosmos_list_memories,
     get_memory as cosmos_get_memory,
-    upsert_memory as cosmos_upsert_memory,
     get_next_memory_id as cosmos_get_next_memory_id,
     get_conversation_messages as cosmos_get_conversation_messages,
     upsert_conversation_turn as cosmos_upsert_conversation_turn,
