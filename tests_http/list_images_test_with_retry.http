@@ -1,0 +1,38 @@
+### Variables
+@host = http://localhost:7071
+@user_id = user123
+
+### api/list-images-test - Premier essai
+# @name api/list-images-test-attempt1
+POST {{host}}/api/list-images-test
+Accept: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "user_id": "{{user_id}}"
+}
+
+### api/list-images-test - Retry en cas de timeout (démarrage à froid)
+# @name api/list-images-test-retry
+POST {{host}}/api/list-images-test
+Accept: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "user_id": "{{user_id}}"
+}
+
+### api/list-images-test - Troisième tentative si nécessaire
+# @name api/list-images-test-retry2
+POST {{host}}/api/list-images-test
+Accept: application/json
+
+{
+  "prompt": "List my images in storage.",
+  "user_id": "{{user_id}}"
+}
+
+### Test de santé pour vérifier que la fonction est bien démarrée
+# @name health-check
+GET {{host}}/api/ping
+Accept: application/json

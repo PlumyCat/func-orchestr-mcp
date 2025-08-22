@@ -14,7 +14,7 @@ from .services.conversation import (
     run_responses_with_tools,
     build_system_message_text,
 )
-from .services.tools import resolve_mcp_config, normalize_allowed_tools
+from .services.tools import resolve_mcp_config, normalize_allowed_tools, execute_tool_call, get_builtin_tools_config
 from .services.memory import (
     get_next_memory_id as cosmos_get_next_memory_id,
     get_conversation_messages as cosmos_get_conversation_messages,
@@ -249,24 +249,111 @@ def mcp_process_worker(msg: func.QueueMessage) -> None:
         output_text: Optional[str] = None
         tools_used_during_run: List[str] = []
 
-        if has_tools:
-            # Use synchronous tool loop for any tools
-            _update_job_status(job_id, "running", 20, "Processing with tools...", created_at=created_at)
+        if has_classic_tools:
+            # Use Chat Completions API for classic tools (same logic as /api/ask)
+            _update_job_status(job_id, "running", 20, "I'm thinking ...", created_at=created_at)
             
-            # Force explicit tool selection for tool usage
-            # If we have exactly one tool after filtering, require its usage
-            filtered_tools = responses_args.get("tools", [])
-            if len(filtered_tools) == 1:
-                responses_args["tool_choice"] = "required"
-                logging.info(f"[mcp-worker] Job {job_id} forcing tool usage with tool_choice=required")
+            # Extract only classic tools for Chat Completions API
+            all_tools = responses_args.get("tools", [])
+            classic_tools = [tool for tool in all_tools if tool.get("type") == "function"]
+            
+            if classic_tools:
+                # Convert responses format to chat format (same logic as /api/ask)
+                messages = []
+                for msg in responses_args.get("input", []):
+                    role = msg.get("role", "user")
+                    content_parts = msg.get("content", [])
+                    text = " ".join([p.get("text", "") for p in content_parts if isinstance(p, dict) and p.get("type") == "input_text"])
+                    if text.strip():
+                        messages.append({"role": role, "content": text})
+                
+                # Add user_id as system message for tools that require it
+                tools_needing_user_id = {"list_images", "init_user", "list_templates_http"}
+                tool_names = {tool.get("name", "") for tool in classic_tools}
+                if user_id and any(tool_name in tools_needing_user_id for tool_name in tool_names):
+                    messages.append({"role": "system", "content": f"user_id={user_id}"})
+                
+                # Ensure tools have correct format for Chat Completions API
+                for tool in classic_tools:
+                    if tool.get("type") == "function" and "function" not in tool:
+                        # Convert from Responses format to Chat Completions format
+                        tool["function"] = {
+                            "name": tool.get("name"),
+                        "description": tool.get("description"),
+                        "parameters": tool.get("parameters")
+                    }
+                
+                tool_choice = "auto"
+                
+                # Create context with user_id for tools
+                tool_context = {"user_id": user_id} if user_id else None
+                
+                # First call - see if model triggers tools
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=classic_tools,
+                    tool_choice=tool_choice,
+                )
+                msg = resp.choices[0].message
+                output_text = ""  # Will be set by follow-up call if tools are used
+                
+                if msg.tool_calls:
+                    # Model requested tools - execute ALL of them like websearch-test
+                    tool_messages = []
+                    for tc in msg.tool_calls:
+                        tool_name = tc.function.name
+                        try:
+                            args = json.loads(tc.function.arguments or "{}")
+                        except Exception:
+                            args = {}
+                        
+                        # Execute the tool
+                        tool_result = execute_tool_call(tool_name, args, tool_context)
+                        
+                        # Track for metadata
+                        tools_used_during_run.append(tool_name)
+                        
+                        # Update status with specific tool message
+                        if tool_name.lower() == "search_web":
+                            _update_job_status(job_id, "running", 50, "Web search in progress...", tool=tool_name, created_at=created_at)
+                        elif tool_name in ["list_templates_http", "list_images", "convert_word_to_pdf", "init_user"]:
+                            _update_job_status(job_id, "running", 50, f"Using tool: {tool_name}", tool=tool_name, created_at=created_at)
+                        else:
+                            _update_job_status(job_id, "running", 50, f"Using tool: {tool_name}", tool=tool_name, created_at=created_at)
+                        
+                        # Add tool response message
+                        tool_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": tool_result,
+                        })
+                    
+                    # Second call with ALL tool results
+                    follow_up = client.chat.completions.create(
+                        model=model,
+                        messages=messages + [msg] + tool_messages,
+                    )
+                    # ALWAYS use follow-up result when tools were used, never the initial content
+                    output_text = follow_up.choices[0].message.content or ""
+                else:
+                    # No tools called, use the original response
+                    output_text = msg.content or ""
             else:
-                responses_args["tool_choice"] = "auto"
-            
-            # Create context with user_id for tools
-            tool_context = {"user_id": user_id} if user_id else None
-            output_text, response = run_responses_with_tools(
-                client, responses_args, tool_context
-            )
+                # No classic tools, fall back to simple completion
+                messages = []
+                for msg in responses_args.get("input", []):
+                    role = msg.get("role", "user")
+                    content_parts = msg.get("content", [])
+                    text = " ".join([p.get("text", "") for p in content_parts if isinstance(p, dict) and p.get("type") == "input_text"])
+                    if text.strip():
+                        messages.append({"role": role, "content": text})
+                
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                )
+                output_text = resp.choices[0].message.content or ""
             
             # Log the final output for debugging
             logging.info(f"[mcp-worker] Job {job_id} completed tool execution. Output length: {len(output_text) if output_text else 0}")
@@ -275,80 +362,73 @@ def mcp_process_worker(msg: func.QueueMessage) -> None:
             elif output_text:
                 logging.info(f"[mcp-worker] Job {job_id} output (truncated): {output_text[:400]}...")
             
-            # Extract actual tools used from response metadata
-            try:
-                actual_tools_used = getattr(response, "_classic_tools_used", [])
-                logging.info(f"[mcp-worker] Job {job_id} tools metadata: {actual_tools_used}")
-                
-                if actual_tools_used and isinstance(actual_tools_used, list):
-                    for tool_info in actual_tools_used:
-                        if isinstance(tool_info, dict) and "name" in tool_info:
-                            tool_name = tool_info["name"]
-                            tool_args = tool_info.get("arguments", {})
-                            logging.info(f"[mcp-worker] Job {job_id} used tool: {tool_name} with args: {tool_args}")
-                            
-                            if tool_name not in tools_used_during_run:
-                                tools_used_during_run.append(tool_name)
-                            
-                            # Update status with specific tool message
-                            if tool_name.lower() == "search_web":
-                                _update_job_status(job_id, "running", 50, "Web search in progress...", tool=tool_name, created_at=created_at)
-                            elif tool_name in ["list_templates_http", "list_images", "convert_word_to_pdf"]:
-                                _update_job_status(job_id, "running", 50, f"Using tool: {tool_name}", tool=tool_name, created_at=created_at)
-                            else:
-                                _update_job_status(job_id, "running", 50, f"Using tool: {tool_name}", tool=tool_name, created_at=created_at)
-            except Exception:
-                logging.exception(f"[mcp-worker] Failed to extract tool usage for job {job_id}")
+            # Log tools used
+            if tools_used_during_run:
+                logging.info(f"[mcp-worker] Job {job_id} used tools: {tools_used_during_run}")
             
+            # Fallback if no output text (shouldn't happen with Chat Completions)
             if not output_text:
                 try:
-                    no_tools_args = dict(responses_args)
-                    no_tools_args.pop("tools", None)
-                    no_tools_args.pop("tool_choice", None)
-                    response = client.responses.create(**no_tools_args)
-                    output_text = getattr(response, "output_text", None)
+                    # Simple fallback without tools
+                    fallback_resp = client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                    )
+                    output_text = fallback_resp.choices[0].message.content or ""
                 except Exception:
                     pass
                     
             _update_job_status(job_id, "running", 90, "Finalizing response...", created_at=created_at)
+        elif has_tools:
+            # Has MCP tools - use original API Responses
+            _update_job_status(job_id, "running", 20, "I'm thinking ...", created_at=created_at)
+            
+            # Create context with user_id for tools
+            tool_context = {"user_id": user_id} if user_id else None
+            output_text, response = run_responses_with_tools(
+                client, responses_args, tool_context
+            )
+            
+            # Extract tools used from response metadata
+            try:
+                actual_tools_used = getattr(response, "_classic_tools_used", [])
+                if actual_tools_used and isinstance(actual_tools_used, list):
+                    for tool_info in actual_tools_used:
+                        if isinstance(tool_info, dict) and "name" in tool_info:
+                            tool_name = tool_info["name"]
+                            if tool_name not in tools_used_during_run:
+                                tools_used_during_run.append(tool_name)
+            except Exception:
+                pass
+            
+            _update_job_status(job_id, "running", 90, "Finalizing response...", created_at=created_at)
         else:
-            # Use streaming for better progress updates
+            # No tools - use simple Chat Completions
             if is_reasoning_task:
                 _update_job_status(job_id, "running", 15, "Deep analysis in progress...", created_at=created_at)
             else:
                 _update_job_status(job_id, "running", 15, "Generating response...", created_at=created_at)
             
-            partial_chunks: List[str] = []
-            progress_value: int = 20
-            
             try:
-                with client.responses.stream(**responses_args) as stream:
-                    for event in stream:
-                        if getattr(event, "type", None) == "response.output_text.delta":
-                            delta = getattr(event, "delta", "")
-                            if delta:
-                                partial_chunks.append(delta)
-                                progress_value = min(90, progress_value + 2)
-                                
-                                # Update progress with partial content
-                                message = "Deep thinking..." if is_reasoning_task else "Generating..."
-                                _update_job_status(
-                                    job_id, "running", progress_value, 
-                                    message, 
-                                    partial_text="".join(partial_chunks),
-                                    created_at=created_at
-                                )
-                                
-                    final_response = stream.get_final_response()
-                    output_text = getattr(final_response, "output_text", None) or "".join(partial_chunks)
-            except Exception:
-                logging.exception(f"[mcp-worker] Streaming failed for job {job_id}, falling back to create")
-                try:
-                    response = client.responses.create(**responses_args)
-                    output_text = getattr(response, "output_text", None)
-                except Exception as e_inner:
-                    logging.exception(f"[mcp-worker] Create failed for job {job_id}")
-                    output_text = f"Error: {e_inner}"
+                # Convert responses format to chat format (same logic as /api/ask)
+                messages = []
+                for msg in responses_args.get("input", []):
+                    role = msg.get("role", "user")
+                    content_parts = msg.get("content", [])
+                    text = " ".join([p.get("text", "") for p in content_parts if isinstance(p, dict) and p.get("type") == "input_text"])
+                    if text.strip():
+                        messages.append({"role": role, "content": text})
+                
+                # Simple chat completion without tools
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                )
+                output_text = resp.choices[0].message.content or ""
+                _update_job_status(job_id, "running", 90, "Finalizing response...", created_at=created_at)
+            except Exception as e:
+                logging.exception(f"[mcp-worker] Chat completion failed for job {job_id}")
+                output_text = f"Error: {e}"
 
         # Mark as completed
         final_status = "completed" if output_text and not output_text.startswith("Error:") else "failed"

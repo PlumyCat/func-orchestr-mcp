@@ -25,6 +25,6 @@ def test_docsvc_tools_use_context_for_user_id(monkeypatch):
     assert images_result == "ok"
     assert templates_result == "ok"
 
-    assert calls[0] == ("POST", "/users/{userId}/init", {"userId": "u123"})
-    assert calls[1] == ("GET", "/users/{userId}/images", {"userId": "u123"})
-    assert calls[2] == ("GET", "/users/{userId}/templates", {"userId": "u123"})
+    assert calls[0] == ("POST", "/users/init", None)  # Now uses JSON body instead of path params
+    assert calls[1] == ("GET", "/users/images", None)  # Now uses JSON body instead of path params  
+    assert calls[2] == ("GET", "/users/templates", None)  # Now uses JSON body instead of path params

@@ -175,7 +175,7 @@ def get_builtin_tools_config() -> List[Dict[str, Any]]:
 
     # Only expose web search if backend configuration is present
     url, key = _websearch_env()
-    if url and key:
+    if url:  # Key is optional for local SearXNG instances
         tools.append(_build_search_web_tool_def())
 
     tools.extend(_build_docsvc_tool_defs())
@@ -412,7 +412,10 @@ def _docsvc_request(method: str, path_template: str, *, path_params: Optional[Di
         headers = {"Content-Type": "application/json"}
         method_upper = (method or "GET").upper()
         if method_upper == "GET":
-            resp = requests.get(url, headers=headers, timeout=timeout)
+            if json_body:
+                resp = requests.get(url, json=json_body, headers=headers, timeout=timeout)
+            else:
+                resp = requests.get(url, headers=headers, timeout=timeout)
         elif method_upper == "POST":
             resp = requests.post(url, headers=headers, data=json.dumps(json_body or {}), timeout=timeout)
         else:
@@ -525,7 +528,8 @@ def _docsvc_init_user(args: Dict[str, Any], context: Optional[Dict[str, Any]] = 
         user_id = str(context.get("user_id") or "").strip()
     if not user_id:
         return "Missing required parameter: user_id"
-    resp_text = _docsvc_request("POST", "/users/{userId}/init", path_params={"userId": user_id})
+    # Use the same endpoint as init_user_test which works correctly
+    resp_text = _docsvc_request("POST", "/users/init", json_body={"user_id": user_id})
     # Prefer a concise human-readable confirmation when possible
     try:
         parsed = json.loads(resp_text)
@@ -548,7 +552,8 @@ def _docsvc_list_images(args: Dict[str, Any], context: Optional[Dict[str, Any]] 
         user_id = str(context.get("user_id") or "").strip()
     if not user_id:
         return "Missing required parameter: user_id"
-    return _docsvc_request("GET", "/users/{userId}/images", path_params={"userId": user_id})
+    # Use the same endpoint as list-images-test
+    return _docsvc_request("GET", "/users/images", json_body={"user_id": user_id})
 
 
 def _docsvc_list_shared_templates(args: Dict[str, Any]) -> str:
@@ -562,4 +567,5 @@ def _docsvc_list_templates_http(args: Dict[str, Any], context: Optional[Dict[str
         user_id = str(context.get("user_id") or "").strip()
     if not user_id:
         return "Missing required parameter: user_id"
-    return _docsvc_request("GET", "/users/{userId}/templates", path_params={"userId": user_id})
+    # Use the same endpoint as list_templates_test which works correctly
+    return _docsvc_request("GET", "/users/templates", json_body={"user_id": user_id})

@@ -9,5 +9,5 @@ Accept: application/json
 
 {
   "prompt": "init my foder on blob.",
-  "user_id": "{{user_id}}"
+  "user_id": "user-159"
 }

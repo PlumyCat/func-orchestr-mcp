@@ -428,7 +428,7 @@ def orchestrate_start(req: func.HttpRequest) -> func.HttpResponse:
         req_blob.upload_blob(json.dumps(orchestration_body, ensure_ascii=False), overwrite=True)
 
         blob_client = storage["blob"].get_blob_client(container=storage["container"], blob=f"{job_id}.json")
-        initial_message = "Analyse et sélection du modèle optimal…" if mode == "deep" else "Préparation de la réponse…"
+        initial_message = "Analyse et sélection du modèle optimal…" if mode == "deep" else "Preparing the response in progress…"
         initial_payload = {
             "status": "queued",
             "progress": 0,
@@ -652,7 +652,7 @@ def ask_start(req: func.HttpRequest) -> func.HttpResponse:
         initial_payload = {
             "status": "queued",
             "progress": 0,
-            "message": "Préparation de la réponse…",
+            "message": "Preparing the response in progress…",
             "tool": "",
             "partial_text": "",
             "final_text": "",
@@ -689,7 +689,7 @@ def ask_start(req: func.HttpRequest) -> func.HttpResponse:
             "ok": True,
             "job_id": job_id,
             "status": "queued",
-            "message": "Préparation de la réponse…",
+            "message": "Preparing the response in progress…",
             "progress": 0,
             "tool": "",
             "mode": "ask",
@@ -742,7 +742,7 @@ def ask_status(req: func.HttpRequest) -> func.HttpResponse:
         # Map internal status to response format (same logic as orchestrate/status)
         if status == "queued":
             mapped_status = "queued"
-            message = content.get("message", "Préparation de la réponse…")
+            message = content.get("message", "Preparing the response in progress…")
             retry_after = 3
         elif status == "running":
             mapped_status = "running" 

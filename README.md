@@ -36,6 +36,26 @@ Le projet offre **6 modes d'utilisation** distincts :
 - Supporte reasoning effort (low/medium/high)
 - Réponse immédiate (pas de streaming)
 
+#### 🎯 **Logique de Sélection des Modes d'Orchestration**
+
+| Mode             | Condition                                                            | Modèle utilisé                 | Usage                                 |
+| ---------------- | -------------------------------------------------------------------- | ------------------------------ | ------------------------------------- |
+| **`"tools"`**    | `allowed_tools` présent **ET** prompt contient mots-clés d'outils    | `ORCHESTRATOR_MODEL_TOOLS`     | Recherche, création, conversion, etc. |
+| **`"deep"`**     | `prefer_reasoning=true` OU mots-clés complexes OU prompt > 800 chars | `ORCHESTRATOR_MODEL_REASONING` | Analyse, stratégie, raisonnement      |
+| **`"trivial"`**  | Prompt < 160 caractères ET pas de conditions spéciales               | `ORCHESTRATOR_MODEL_TRIVIAL`   | Questions simples, courtes            |
+| **`"standard"`** | Par défaut                                                           | `ORCHESTRATOR_MODEL_STANDARD`  | Cas général                           |
+
+**Mots-clés d'outils détectés :**
+- **Recherche :** search, find, lookup, web, internet, recherche, cherche
+- **Affichage :** list, show, get, retrieve, liste, montre, affiche  
+- **Création :** create, init, initialize, crée, initialise
+- **Conversion :** convert, transform, convertir, transformer
+
+**Mots-clés de raisonnement complexe :**
+- plan, strategy, why, prove, analyze, stratégie, pourquoi, analyse détaillée, etc.
+
+> 💡 **Astuce :** Vous pouvez utiliser `"allowed_tools": "*"` en permanence - l'orchestration sera intelligente et ne déclenchera le mode tools que si le prompt le nécessite réellement.
+
 **3. `POST /api/mcp-run`** - Outils MCP seulement
 - Focus sur les outils MCP uniquement
 - Pas compatible Copilot Studio (pas de streaming)
@@ -73,15 +93,15 @@ Le projet offre **6 modes d'utilisation** distincts :
 
 Les endpoints streaming fournissent des messages de statut intelligents :
 
-| Type d'activité | Message affiché | Status |
-|------------------|-----------------|---------|
-| **Réflexion/Reasoning** | "Analyse et réflexion en cours…" | `running` |
-| **Génération simple** | "Génération de la réponse…" | `running` |
-| **Recherche web** | "Recherche web en cours…" | `tool` |
-| **Accès documents** | "Accès aux documents…" | `tool` |
-| **Outil spécifique** | "Utilisation de l'outil: {nom}" | `tool` |
-| **Terminé** | "Terminé" | `completed` |
-| **Erreur** | "Erreur: {détails}" | `failed` |
+| Type d'activité         | Message affiché                  | Status      |
+| ----------------------- | -------------------------------- | ----------- |
+| **Réflexion/Reasoning** | "Analyse et réflexion en cours…" | `running`   |
+| **Génération simple**   | "Génération de la réponse…"      | `running`   |
+| **Recherche web**       | "Recherche web en cours…"        | `tool`      |
+| **Accès documents**     | "Accès aux documents…"           | `tool`      |
+| **Outil spécifique**    | "Utilisation de l'outil: {nom}"  | `tool`      |
+| **Terminé**             | "Terminé"                        | `completed` |
+| **Erreur**              | "Erreur: {détails}"              | `failed`    |
 
 ### Format de Réponse Streaming
 

@@ -7,5 +7,5 @@ POST {{host}}/api/websearch-test
 Accept: application/json
 
 {
-  "prompt": "What are the latest updates in Azure Functions pricing for 2024?"
+  "prompt": "Quel temps fait il à Paris aujourd'hui ?"
 }

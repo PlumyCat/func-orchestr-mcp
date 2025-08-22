@@ -19,6 +19,11 @@ Content-Type: application/json
   "reasoning_effort": "low"
 }
 
+### Orchestrate Status - Auto job ID from previous request
+# @name copilot_status_auto
+GET {{host}}/api/orchestrate/status?job_id={{copilot_start_simple.response.body.job_id}}
+Accept: application/json
+
 ### Orchestrate Start Job 2 - With tools (websearch)
 # @name copilot_start_tools
 POST {{host}}/api/orchestrate/start
@@ -28,9 +33,14 @@ Content-Type: application/json
   "prompt": "What's the weather like in Paris today?",
   "user_id": "{{user_id}}",
   "conversation_id": "init",
-  "allowed_tools": "websearch",
+  "allowed_tools": "*",
   "reasoning_effort": "medium"
 }
+
+### Orchestrate Status - Auto job ID from previous request With tools (websearch)
+# @name copilot_status_auto
+GET {{host}}/api/orchestrate/status?job_id={{copilot_start_tools.response.body.job_id}}
+Accept: application/json
 
 ### Orchestrate Start Job 3 - Classic tools (documents)
 # @name copilot_start_classic
@@ -76,18 +86,6 @@ Content-Type: application/json
 GET {{host}}/api/orchestrate/status?job_id={{copilot_job_id}}
 Accept: application/json
 
-### Orchestrate Status - Auto job ID from previous request
-# @name copilot_status_auto
-GET {{host}}/api/orchestrate/status?job_id={{copilot_start_simple.response.body.job_id}}
-Accept: application/json
-
-### Orchestrate Status - Auto job ID from previous request With tools (websearch)
-# @name copilot_status_auto
-GET {{host}}/api/orchestrate/status?job_id={{copilot_start_tools.response.body.job_id}}
-Accept: application/json
-
-
-
 
 ### Orchestrate Start Job 3 - Classic tools (documents)
 # @name copilot_start_classic
@@ -95,37 +93,14 @@ POST {{host}}/api/orchestrate/start
 Content-Type: application/json
 
 {
-  "prompt": "What are the latest updates in Azure Functions pricing for 2024?",
+  "prompt": "What are the latest updates in Azure Functions pricing for 2025?",
   "user_id": "{{user_id}}",
   "conversation_id": "init",
-  "allowed_tools": "search_web",
+  "allowed_tools": "*",
   "reasoning_effort": "low"
 }
-
-
 
 ### Orchestrate Status - Auto job ID from previous request With tools (websearch)
 # @name copilot_status_auto
 GET {{host}}/api/orchestrate/status?job_id={{copilot_start_classic.response.body.job_id}}
-Accept: application/json
-
-
-
-
-### Orchestrate Start Job 2 - With tools (websearch)
-# @name copilot_start_tools
-POST {{host}}/api/orchestrate/start
-Content-Type: application/json
-
-{
-  "prompt": "What's the weather like in Paris today?",
-  "user_id": "{{user_id}}",
-  "conversation_id": "init",
-  "allowed_tools": "websearch",
-  "reasoning_effort": "medium"
-}
-
-### Orchestrate Status - Auto job ID from previous request With tools (websearch)
-# @name copilot_status_auto
-GET {{host}}/api/orchestrate/status?job_id={{copilot_start_tools.response.body.job_id}}
 Accept: application/json

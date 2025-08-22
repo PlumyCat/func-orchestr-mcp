@@ -1,0 +1,38 @@
+### Variables
+@host = http://localhost:7071
+@user_id = user592
+
+### api/init-user-test - Premier essai
+# @name api/init-user-test-attempt1
+POST {{host}}/api/init-user-test
+Accept: application/json
+
+{
+  "prompt": "init my folder on blob.",
+  "user_id": "{{user_id}}"
+}
+
+### api/init-user-test - Retry en cas de timeout (démarrage à froid)
+# @name api/init-user-test-retry
+POST {{host}}/api/init-user-test
+Accept: application/json
+
+{
+  "prompt": "init my folder on blob.",
+  "user_id": "{{user_id}}"
+}
+
+### api/init-user-test - Troisième tentative si nécessaire
+# @name api/init-user-test-retry2
+POST {{host}}/api/init-user-test
+Accept: application/json
+
+{
+  "prompt": "init my folder on blob.",
+  "user_id": "{{user_id}}"
+}
+
+### Test de santé pour vérifier que la fonction est bien démarrée
+# @name health-check
+GET {{host}}/api/ping
+Accept: application/json

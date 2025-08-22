@@ -19,7 +19,12 @@ Content-Type: application/json
   "reasoning_effort": "low"
 }
 
-### Ask Start Job 2 - Simple test (should work)
+### Ask Status - Auto job ID from simple test
+# @name ask_status_simple
+GET {{host}}/api/ask/status?job_id={{ask_start_simple.response.body.job_id}}
+Accept: application/json
+
+### Ask Start Job 2 - continu conversation
 # @name ask_start_simple_resume
 POST {{host}}/api/ask/start
 Content-Type: application/json
@@ -31,6 +36,11 @@ Content-Type: application/json
   "conversation_id": "{{ask_start_simple.response.body.conversation_id}}",
   "reasoning_effort": "low"
 }
+
+### Ask Status - Tool use
+# @name ask_status_simple_resume
+GET {{host}}/api/ask/status?job_id={{ask_start_simple_resume.response.body.job_id}}
+Accept: application/json
 
 ### Ask Start Job 2 - Specific model
 # @name ask_start_specific
@@ -58,53 +68,32 @@ Content-Type: application/json
   "reasoning_effort": "high"
 }
 
+### Ask Status - Reasoning model
+# @name ask_status_reasoning
+GET {{host}}/api/ask/status?job_id={{ask_start_reasoning.response.body.job_id}}
+Accept: application/json
+
 ### Ask start Job 4 Use tool
 # @name ask_start_tool
 POST {{host}}/api/ask/start
 Content-Type: application/json
 
 {
-  "prompt": "List my images in storage.",
-  "model": "gpt-5-mini", 
+  "prompt": "List the shared templates available to everyone and my templates in storage.",
+  "model": "gpt-4.1-mini", 
   "user_id": "{{user_id}}",
   "conversation_id": "init",
-  "allowed_tools": ["list_images"]
+  "allowed_tools": ["*"]
 }
-
-### Ask Status - Manual job ID
-# @name ask_status
-GET {{host}}/api/ask/status?job_id={{ask_job_id}}
-Accept: application/json
-
-### Ask Status - Auto job ID from simple test
-# @name ask_status_simple
-GET {{host}}/api/ask/status?job_id={{ask_start_simple.response.body.job_id}}
-Accept: application/json
-
-### Ask Status - Auto job ID from specific test
-# @name ask_status_specific
-GET {{host}}/api/ask/status?job_id={{ask_start_specific.response.body.job_id}}
-Accept: application/json
-
-### Ask Status - Reasoning model
-# @name ask_status_reasoning
-GET {{host}}/api/ask/status?job_id={{ask_start_reasoning.response.body.job_id}}
-Accept: application/json
-
-### Ask Status - Tool use
-# @name ask_status_simple_resume
-GET {{host}}/api/ask/status?job_id={{ask_start_simple_resume.response.body.job_id}}
-Accept: application/json
 
 ### Ask Status - Tool use
 # @name ask_status_tool
 GET {{host}}/api/ask/status?job_id={{ask_start_tool.response.body.job_id}}
 Accept: application/json
 
-### 
-POST http://localhost:7071/api/websearch-test
-Content-Type: application/json
+### Ask Status - Manual job ID
+# @name ask_status
+GET {{host}}/api/ask/status?job_id={{ask_job_id}}
+Accept: application/json
 
-{
-  "prompt": "What are the latest updates in Azure Functions pricing for 2024?"
-}
+

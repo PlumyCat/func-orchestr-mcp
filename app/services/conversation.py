@@ -60,8 +60,23 @@ def orchestrator_models() -> dict:
 
 
 def route_mode(prompt: str, has_tools: bool, constraints: dict, allowed_tools: Optional[List[str]] = None) -> str:
-    # Only select tools mode if caller explicitly allows tools
-    if has_tools and allowed_tools:
+    # Check if prompt actually needs tools (not just if tools are available)
+    text = (prompt or "").lower()
+    
+    # Tool-indicating keywords (French + English)
+    tool_keywords = [
+        "search", "find", "lookup", "web", "internet", "current", "latest", "news",
+        "recherche", "cherche", "trouve", "web", "internet", "actuel", "récent", "nouvelles",
+        "list", "show", "get", "retrieve", "fetch", "display",
+        "liste", "montre", "affiche", "récupère", "obtient",
+        "create", "init", "initialize", "setup", "configure",
+        "crée", "créer", "initialise", "initialiser", "configure",
+        "convert", "transform", "change", "modify",
+        "convertir", "transformer", "changer", "modifier"
+    ]
+    
+    # Only select tools mode if caller allows tools AND prompt suggests tool usage
+    if has_tools and allowed_tools and any(keyword in text for keyword in tool_keywords):
         return "tools"
 
     # Accept both camelCase and snake_case flags and flat boolean values
