@@ -36,25 +36,25 @@ Le projet offre **6 modes d'utilisation** distincts :
 - Supporte reasoning effort (low/medium/high)
 - Réponse immédiate (pas de streaming)
 
-#### 🎯 **Logique de Sélection des Modes d'Orchestration**
+#### 🎯 **Orchestration Mode Selection Logic**
 
-| Mode             | Condition                                                            | Modèle utilisé                 | Usage                                 |
-| ---------------- | -------------------------------------------------------------------- | ------------------------------ | ------------------------------------- |
-| **`"tools"`**    | `allowed_tools` présent **ET** prompt contient mots-clés d'outils    | `ORCHESTRATOR_MODEL_TOOLS`     | Recherche, création, conversion, etc. |
-| **`"deep"`**     | `prefer_reasoning=true` OU mots-clés complexes OU prompt > 800 chars | `ORCHESTRATOR_MODEL_REASONING` | Analyse, stratégie, raisonnement      |
-| **`"trivial"`**  | Prompt < 160 caractères ET pas de conditions spéciales               | `ORCHESTRATOR_MODEL_TRIVIAL`   | Questions simples, courtes            |
-| **`"standard"`** | Par défaut                                                           | `ORCHESTRATOR_MODEL_STANDARD`  | Cas général                           |
+| Mode             | Condition                                                         | Model Used                     | Usage                              |
+| ---------------- | ----------------------------------------------------------------- | ------------------------------ | ---------------------------------- |
+| **`"tools"`**    | `allowed_tools` present **AND** prompt contains tool keywords     | `ORCHESTRATOR_MODEL_TOOLS`     | Search, creation, conversion, etc. |
+| **`"deep"`**     | `prefer_reasoning=true` OR complex keywords OR prompt > 800 chars | `ORCHESTRATOR_MODEL_REASONING` | Analysis, strategy, reasoning      |
+| **`"trivial"`**  | Prompt < 160 characters AND no special conditions                 | `ORCHESTRATOR_MODEL_TRIVIAL`   | Simple, short questions            |
+| **`"standard"`** | Default fallback                                                  | `ORCHESTRATOR_MODEL_STANDARD`  | General use case                   |
 
-**Mots-clés d'outils détectés :**
-- **Recherche :** search, find, lookup, web, internet, recherche, cherche
-- **Affichage :** list, show, get, retrieve, liste, montre, affiche  
-- **Création :** create, init, initialize, crée, initialise
-- **Conversion :** convert, transform, convertir, transformer
+**Tool keywords detected:**
+- **Search:** search, find, lookup, web, internet, recherche, cherche
+- **Display:** list, show, get, retrieve, liste, montre, affiche  
+- **Creation:** create, init, initialize, crée, initialise
+- **Conversion:** convert, transform, convertir, transformer
 
-**Mots-clés de raisonnement complexe :**
+**Complex reasoning keywords:**
 - plan, strategy, why, prove, analyze, stratégie, pourquoi, analyse détaillée, etc.
 
-> 💡 **Astuce :** Vous pouvez utiliser `"allowed_tools": "*"` en permanence - l'orchestration sera intelligente et ne déclenchera le mode tools que si le prompt le nécessite réellement.
+> 💡 **Tip:** You can use `"allowed_tools": "*"` permanently - orchestration will be smart and only trigger tools mode when the prompt actually needs it.
 
 **3. `POST /api/mcp-run`** - Outils MCP seulement
 - Focus sur les outils MCP uniquement
@@ -264,6 +264,34 @@ print(resolve_special_model("model-router"))
 - `model-router` and `gpt-oss-120b` are currently in preview and their behavior may change.
 - `gpt-oss-120b` requests are limited to around 64k tokens per interaction.
 - Always check the [model router documentation](https://learn.microsoft.com/azure/ai-services/openai/how-to/model-routing) and [open-source model notes](https://learn.microsoft.com/azure/ai-services/openai/concepts/models#open-source-models) for the latest guidance.
+
+
+### Authentication & subscription (Azure CLI and azd)
+
+Make sure you’re signed in to the **same** tenant and **same** subscription in both **Azure CLI** and **Azure Developer CLI (azd)** before running `azd up`, `azd provision`, etc.
+
+1. Azure CLI — select tenant and subscription
+
+```bash
+az login --tenant <TENANT_ID>
+az account set --subscription <SUBSCRIPTION_ID>
+# Verify
+az account show -o table
+```
+
+2. azd — align the default subscription
+
+```bash
+azd logout
+azd config list
+azd config set defaults.subscription <SUBSCRIPTION_ID>
+azd login            # or: azd login --tenant-id <TENANT_ID> if you use multiple tenants
+# Verify
+azd config list
+```
+
+> Summary: Azure CLI and azd must point to the same `<TENANT_ID>` and `<SUBSCRIPTION_ID>` to avoid prompts showing the wrong subscription.
+
 
 ## Deploy to Azure
 
